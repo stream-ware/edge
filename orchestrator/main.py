@@ -18,6 +18,7 @@ import signal
 import sys
 import json
 import os
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, TYPE_CHECKING
 
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from .adapters.docker_adapter import DockerAdapter
     from .adapters.mqtt_adapter import MQTTAdapter
     from .adapters.firmware_adapter import FirmwareAdapter
+    from .adapters.env_adapter import EnvAdapter
     from .vision.adapter import VisionAdapter
 
 
@@ -50,7 +52,9 @@ class Orchestrator:
     
     def __init__(self, config_path: str = "config/config.yaml"):
         self.logger = logging.getLogger("orchestrator")
+        self._load_dotenv()
         self.config = self._load_config(config_path)
+        self._apply_env_overrides(self.config)
         
         # Komponenty
         self.text2dsl = Text2DSL(self.config.get("text2dsl", {}))
@@ -90,9 +94,81 @@ class Orchestrator:
                 "port": 1883
             },
             "adapters": {
-                "enabled": ["docker", "mqtt"]
+                "enabled": ["docker", "mqtt", "env"]
             }
         }
+
+    def _load_dotenv(self) -> None:
+        env_file = os.environ.get("STREAMWARE_ENV_FILE", ".env")
+        try:
+            from dotenv import load_dotenv
+        except ImportError:
+            return
+
+        load_dotenv(env_file, override=False)
+
+    def _apply_env_overrides(self, config: dict) -> None:
+        mode = os.environ.get("STREAMWARE_MODE")
+        if mode:
+            config["mode"] = mode
+
+        mqtt_broker = os.environ.get("MQTT_BROKER")
+        if mqtt_broker:
+            config.setdefault("mqtt", {})["broker"] = mqtt_broker
+
+        mqtt_port = os.environ.get("MQTT_PORT")
+        if mqtt_port:
+            try:
+                config.setdefault("mqtt", {})["port"] = int(mqtt_port)
+            except ValueError:
+                config.setdefault("mqtt", {})["port"] = mqtt_port
+
+        ollama_host = os.environ.get("OLLAMA_HOST")
+        if ollama_host:
+            config.setdefault("llm", {})["base_url"] = ollama_host
+
+        prefix = "STREAMWARE__"
+        for key, value in os.environ.items():
+            if not key.startswith(prefix):
+                continue
+            path = [p.lower() for p in key[len(prefix):].split("__") if p]
+            if not path:
+                continue
+            self._set_config_path(config, path, self._coerce_env_value(value))
+
+    def _set_config_path(self, config: dict, path: list, value: Any) -> None:
+        node: Any = config
+        for part in path[:-1]:
+            if not isinstance(node, dict):
+                return
+            if part not in node or not isinstance(node.get(part), dict):
+                node[part] = {}
+            node = node[part]
+
+        if isinstance(node, dict):
+            node[path[-1]] = value
+
+    def _coerce_env_value(self, raw: str) -> Any:
+        val = raw.strip()
+        low = val.lower()
+        if low in {"true", "false"}:
+            return low == "true"
+
+        try:
+            if re.match(r"^-?\d+$", val):
+                return int(val)
+            if re.match(r"^-?\d+\.\d+$", val):
+                return float(val)
+        except Exception:
+            pass
+
+        if (val.startswith("{") and val.endswith("}")) or (val.startswith("[") and val.endswith("]")):
+            try:
+                return json.loads(val)
+            except Exception:
+                return val
+
+        return val
     
     async def initialize(self):
         """Inicjalizacja komponentów (lazy loading dla szybkiego startu)."""
@@ -143,6 +219,13 @@ class Orchestrator:
             from .adapters.docker_adapter import DockerAdapter
             self.adapters["docker"] = DockerAdapter()
             await self.adapters["docker"].initialize()
+
+        if "env" in enabled:
+            self.logger.info("  → Env Adapter (lazy loading)...")
+            from .adapters.env_adapter import EnvAdapter
+            env_cfg = self.config.get("adapters", {}).get("env", {})
+            self.adapters["env"] = EnvAdapter(env_cfg)
+            await self.adapters["env"].initialize()
         
         if "firmware" in enabled:
             self.logger.info("  → Firmware Adapter...")

@@ -99,6 +99,46 @@ class TestText2DSL:
         
         assert dsl is not None
         assert dsl["action"] == "system.exit"
+
+    def test_env_get_command(self, text2dsl):
+        dsl = text2dsl.nl_to_dsl("pokaż env MQTT_BROKER")
+
+        assert dsl is not None
+        assert dsl["action"] == "env.get"
+        assert dsl["key"] == "MQTT_BROKER"
+
+    def test_env_set_command(self, text2dsl):
+        dsl = text2dsl.nl_to_dsl("ustaw env MQTT_BROKER na mqtt")
+
+        assert dsl is not None
+        assert dsl["action"] == "env.set"
+        assert dsl["key"] == "MQTT_BROKER"
+        assert dsl["value"] == "mqtt"
+
+    def test_env_unset_command(self, text2dsl):
+        dsl = text2dsl.nl_to_dsl("usuń env MQTT_BROKER")
+
+        assert dsl is not None
+        assert dsl["action"] == "env.unset"
+        assert dsl["key"] == "MQTT_BROKER"
+
+    def test_env_list_command(self, text2dsl):
+        dsl = text2dsl.nl_to_dsl("pokaż zmienne env")
+
+        assert dsl is not None
+        assert dsl["action"] == "env.list"
+
+    def test_env_editor_command(self, text2dsl):
+        dsl = text2dsl.nl_to_dsl("edytuj env")
+
+        assert dsl is not None
+        assert dsl["action"] == "env.editor"
+
+    def test_env_reload_command(self, text2dsl):
+        dsl = text2dsl.nl_to_dsl("przeładuj env")
+
+        assert dsl is not None
+        assert dsl["action"] == "env.reload"
     
     def test_unknown_command_returns_none(self, text2dsl):
         """Test that unknown commands return None."""

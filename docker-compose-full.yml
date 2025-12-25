@@ -40,17 +40,19 @@ services:
     image: streamware-orchestrator:latest
     container_name: orchestrator
     environment:
-      - MQTT_BROKER=mqtt
-      - MQTT_PORT=1883
+      - MQTT_BROKER=${MQTT_BROKER:-mqtt}
+      - MQTT_PORT=${MQTT_PORT:-1883}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - DB_HOST=db
       - DB_PORT=5432
       - DB_USER=streamware
       - DB_PASSWORD=${DB_PASSWORD:-streamware123}
-      - STREAMWARE_MODE=docker
+      - STREAMWARE_MODE=${STREAMWARE_MODE:-docker}
+      - STREAMWARE_ENV_FILE=/app/.env
     volumes:
       - ./config:/app/config:ro
       - ./models:/app/models:ro
+      - ./.env:/app/.env
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       mqtt:

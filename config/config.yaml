@@ -76,6 +76,7 @@ adapters:
     - mqtt
     - firmware
     - vision
+    - env
   
   # Docker settings
   docker:
@@ -85,6 +86,10 @@ adapters:
   # Firmware/IoT settings
   firmware:
     simulation: true  # Use simulated sensors
+
+  env:
+    path: ".env"
+    editor: null
 
 # ============================================
 # VISION SETTINGS

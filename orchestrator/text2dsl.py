@@ -50,6 +50,26 @@ class Text2DSL:
     
     def _init_patterns(self):
         """Inicjalizacja wzorców rozpoznawania."""
+
+        self.env_patterns = [
+            (r"(pokaż|odczytaj|get)\s+(zmienn[aę]\s+)?(env|środowiskow[aą])\s+([A-Za-z_][A-Za-z0-9_]*)",
+             lambda m: {"action": "env.get", "key": m.group(4)}),
+
+            (r"(ustaw|set)\s+(zmienn[aę]\s+)?(env|środowiskow[aą])\s+([A-Za-z_][A-Za-z0-9_]*)\s+(na|to)\s+(.+)",
+             lambda m: {"action": "env.set", "key": m.group(4), "value": m.group(6).strip()}),
+
+            (r"(usuń|unset)\s+(zmienn[aę]\s+)?(env|środowiskow[aą])\s+([A-Za-z_][A-Za-z0-9_]*)",
+             lambda m: {"action": "env.unset", "key": m.group(4)}),
+
+            (r"(lista|pokaż)\s+(zmiennych|zmienne)\s+(env|środowiskowe)",
+             lambda m: {"action": "env.list"}),
+
+            (r"(edytuj|otwórz)\s+(\.env|env)",
+             lambda m: {"action": "env.editor"}),
+
+            (r"(przeładuj|reload)\s+(\.env|env)",
+             lambda m: {"action": "env.reload"}),
+        ]
         
         # Docker patterns
         self.docker_patterns = [
@@ -196,7 +216,8 @@ class Text2DSL:
         if not text:
             return None
         
-        text_lower = text.lower().strip()
+        text_stripped = text.strip()
+        text_lower = text_stripped.lower()
         
         # Sprawdź cache
         if text_lower in self._cache:
@@ -204,6 +225,17 @@ class Text2DSL:
             return self._cache[text_lower]
         
         # Próbuj pattern matching
+        # env.* musi zachować wielkość liter kluczy i wartości (np. MQTT_BROKER)
+        for pattern, handler in self.env_patterns:
+            match = re.search(pattern, text_stripped, flags=re.IGNORECASE)
+            if match:
+                dsl = handler(match)
+                dsl["_source"] = "pattern"
+                dsl["_raw"] = text
+                self.logger.info(f"Pattern match: '{text}' -> {dsl}")
+                self._cache[text_lower] = dsl
+                return dsl
+
         # Kolejność ma znaczenie: komendy IoT/urządzeń (np. "włącz światło")
         # nie mogą zostać błędnie zinterpretowane jako docker.start.
         all_patterns = (
@@ -321,6 +353,42 @@ class Text2DSL:
                 return f"{device.capitalize()}{loc_str} ustawione na {state}."
             else:
                 return f"Nie udało się ustawić {device}."
+
+        elif action == "env.get":
+            if status == "ok":
+                return f"{dsl.get('key')}={dsl.get('value')}"
+            return f"Nie udało się odczytać zmiennej {dsl.get('key', '')}."
+
+        elif action == "env.set":
+            if status == "ok":
+                return f"Ustawiono {dsl.get('key')} w .env."
+            return f"Nie udało się ustawić zmiennej {dsl.get('key', '')}."
+
+        elif action == "env.unset":
+            if status == "ok":
+                return f"Usunięto {dsl.get('key')} z .env."
+            return f"Nie udało się usunąć zmiennej {dsl.get('key', '')}."
+
+        elif action == "env.list":
+            if status == "ok":
+                keys = dsl.get("keys", [])
+                if not keys:
+                    return "Brak zmiennych w .env."
+                preview = ", ".join(keys[:20])
+                if len(keys) > 20:
+                    preview += ", ..."
+                return f"Zmiennych w .env: {len(keys)}. Klucze: {preview}"
+            return "Nie udało się pobrać listy zmiennych .env."
+
+        elif action == "env.editor":
+            if status == "ok":
+                return "Otworzyłem edytor pliku .env."
+            return "Nie udało się otworzyć edytora .env."
+
+        elif action == "env.reload":
+            if status == "ok":
+                return f"Przeładowano zmienne z .env ({dsl.get('count', 0)})."
+            return "Nie udało się przeładować .env."
         
         # Vision responses
         elif action == "vision.describe":
@@ -416,7 +484,15 @@ Czujniki:
 
 System:
 - "Pomoc" - ta wiadomość
-- "Koniec" - zakończenie"""
+- "Koniec" - zakończenie
+
+ENV (.env):
+- "Pokaż env MQTT_BROKER" - odczyt zmiennej
+- "Ustaw env MQTT_BROKER na mqtt" - zapis do .env
+- "Usuń env MQTT_BROKER" - usuń z .env
+- "Pokaż zmienne env" - lista kluczy
+- "Edytuj env" - otwórz edytor .env
+- "Przeładuj env" - wczytaj .env do procesu"""
     
     def parse_llm_response(self, llm_response: str) -> Optional[Dict[str, Any]]:
         """
@@ -449,6 +525,7 @@ System:
 Dostępne akcje:
 - docker.restart, docker.stop, docker.start, docker.logs, docker.status, docker.list
 - sensor.read, device.set
+- env.get, env.set, env.unset, env.list, env.editor, env.reload
 - sql.query, sql.count, sql.select
 - system.help, system.exit
 

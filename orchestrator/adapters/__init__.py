@@ -1,6 +1,7 @@
 """Adapters module"""
 from .docker_adapter import DockerAdapter
+from .env_adapter import EnvAdapter
 from .mqtt_adapter import MQTTAdapter
 from .firmware_adapter import FirmwareAdapter
 
-__all__ = ["DockerAdapter", "MQTTAdapter", "FirmwareAdapter"]
+__all__ = ["DockerAdapter", "EnvAdapter", "MQTTAdapter", "FirmwareAdapter"]
