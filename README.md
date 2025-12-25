@@ -1,290 +1,291 @@
-# 🤖 Streamware Jetson - Lokalny Asystent Wizyjno-Głosowy
+# 🎯 Streamware Orchestrator
 
-**Real-time audio/video AI assistant dla NVIDIA Jetson Orin Nano 8GB**
+**LLM-powered Docker/IoT Orchestrator z interfejsem głosowym i wizyjnym**
 
-## 🎯 Funkcjonalności
+Integracja:
+- **Audio Interface** (STT/TTS) - Faster-Whisper + Piper
+- **Vision Interface** - YOLOv8 + Multi-camera support (USB/RTSP/HTTP)
+- **LLM Orchestrator** - Ollama/Phi-3
+- **Text2DSL** - Natural Language → Domain Specific Language
+- **MQTT** - Komunikacja z urządzeniami IoT/Edge
+- **Docker Control** - Zarządzanie kontenerami głosem
 
-- **Speech-to-Text**: Rozpoznawanie mowy w czasie rzeczywistym (PL/EN)
-- **Vision AI**: Detekcja obiektów przez kamerę
-- **LLM**: Lokalne przetwarzanie języka naturalnego
-- **Text-to-Speech**: Synteza mowy w języku polskim
-- **Zero nagrywania**: Wszystko w RAM, zgodność z RODO
-
-## 📊 Architektura
+## 🏗️ Architektura
 
 ```
-┌─────────────┐     ┌─────────────┐
-│  Mikrofon   │────►│  STT        │
-│  (PyAudio)  │     │  (Whisper)  │
-└─────────────┘     └──────┬──────┘
-                           │
-┌─────────────┐            │      ┌─────────────┐
-│  Kamera     │────►┌──────▼──────┤  Orchestrator│────►│  TTS        │
-│  (OpenCV)   │     │             │  (Asyncio)   │     │  (Piper)    │
-└─────────────┘     │             └──────┬───────┘     └─────────────┘
-       │            │                    │
-       ▼            │                    ▼
-┌─────────────┐     │             ┌─────────────┐
-│  Vision     │─────┘             │  LLM        │
-│  (YOLOv8)   │                   │  (Ollama)   │
-└─────────────┘                   └─────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    STREAMWARE ORCHESTRATOR                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  [Mikrofon] ──► [STT/Whisper] ──┐                               │
+│                                  ├──► [LLM/Ollama]              │
+│  [Kamery] ───► [Vision/YOLO] ───┘         │                     │
+│   ├─ USB                             [Text2DSL]                  │
+│   ├─ RTSP (IP)                            │                     │
+│   └─ HTTP/MJPEG          ┌────────────────┼────────────────┐    │
+│                          │                │                │    │
+│                    [Docker]         [Vision]         [MQTT]     │
+│                    Adapter          Adapter         Adapter     │
+│                          │                │                │    │
+│                          └────────────────┼────────────────┘    │
+│                                           │                     │
+│                                      [MQTT Broker]              │
+│                                           │                     │
+│  [Głośnik] ◄── [TTS/Piper] ◄─────────────┘                     │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## 🔧 Stack technologiczny
+## 📹 Obsługiwane źródła wideo
 
-| Komponent | Technologia | Uzasadnienie |
-|-----------|-------------|--------------|
-| STT | **Faster-Whisper small** | Optymalny balans prędkość/jakość na GPU |
-| Vision | **YOLOv8n + TensorRT** | Natywna akceleracja Jetson |
-| LLM | **Ollama + Phi-3 Mini** | 3.8B parametrów, mieści się w 8GB |
-| TTS | **Piper TTS** | Ultra-lekki, dobra jakość PL |
-| Audio I/O | **PyAudio + sounddevice** | Niskie latency |
-| Video I/O | **OpenCV + GStreamer** | Hardware decode na Jetson |
-| IPC | **asyncio + queues** | Zero overhead, single process |
+| Typ | Przykład | Opis |
+|-----|----------|------|
+| **USB** | `0`, `1`, `/dev/video0` | Kamera USB/V4L2 |
+| **CSI** | `csi://0` | Kamera CSI (Jetson) |
+| **RTSP** | `rtsp://192.168.1.100:554/stream` | Kamery IP |
+| **HTTP** | `http://192.168.1.101/video.mjpg` | Streamy MJPEG |
+| **File** | `/path/to/video.mp4` | Pliki wideo |
 
-## 📋 Wymagania
+## 📋 Komendy głosowe
 
-### Hardware
-- NVIDIA Jetson Orin Nano 8GB
-- Mikrofon USB (lub I2S)
-- Kamera USB/CSI
-- Głośnik/słuchawki
+### Docker
 
-### Software
-- JetPack 6.0+ (Ubuntu 22.04)
-- CUDA 12.2+
-- Python 3.10+
+| Komenda | Akcja DSL |
+|---------|-----------|
+| "Zrestartuj backend" | `docker.restart` |
+| "Pokaż logi frontendu" | `docker.logs` |
+| "Status kontenerów" | `docker.status` |
 
-## 🚀 Instalacja
+### Vision / Kamera
 
-### 1. Przygotowanie systemu
+| Komenda | Akcja DSL |
+|---------|-----------|
+| "Co widzisz?" | `vision.describe` |
+| "Ile osób widzisz?" | `vision.count` |
+| "Gdzie jest kubek?" | `vision.find` |
+| "Dodaj kamerę rtsp://..." | `vision.add_camera` |
+| "Lista kamer" | `vision.list_cameras` |
+| "Skanuj sieć RTSP" | `vision.scan_network` |
+
+### IoT / Sensory
+
+| Komenda | Akcja DSL |
+|---------|-----------|
+| "Jaka jest temperatura?" | `sensor.read` |
+| "Włącz światło w kuchni" | `device.set` |
+
+### Text2DSL - przykłady transformacji
+
+```
+Natural Language                    →  DSL (JSON)
+────────────────────────────────────────────────────────────────
+"Zrestartuj backend"               →  {"action": "docker.restart", 
+                                        "target": "backend"}
+
+"Pokaż ostatnie 20 linii logów"    →  {"action": "docker.logs",
+                                        "target": "backend", 
+                                        "tail": 20}
+
+"Jaka jest temperatura w salonie?" →  {"action": "sensor.read",
+                                        "device": "salon",
+                                        "metric": "temperature"}
+```
+
+## 🚀 Wdrożenia Docker
+
+### Deployment 1: Single Container (Development)
 
 ```bash
-# Aktualizacja
-sudo apt update && sudo apt upgrade -y
-
-# Podstawowe zależności
-sudo apt install -y \
-    python3-pip python3-venv \
-    portaudio19-dev libsndfile1 \
-    libopencv-dev ffmpeg \
-    espeak-ng libespeak-ng-dev
+docker-compose -f docker-compose-single.yml up
 ```
 
-### 2. Klonowanie i setup
+### Deployment 2: Multi-Service (Staging)
 
 ```bash
-git clone https://github.com/softreck/streamware-jetson.git
-cd streamware-jetson
-
-# Virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Instalacja zależności
-pip install -r requirements.txt
+docker-compose -f docker-compose-multi.yml up
 ```
 
-### 3. Modele
+### Deployment 3: Full Edge + Backend (Production)
 
 ```bash
-# Ollama
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull phi3:mini
-
-# Whisper
-python -c "from faster_whisper import WhisperModel; WhisperModel('small', device='cuda')"
-
-# Piper TTS (polski głos)
-./scripts/download_piper_pl.sh
-
-# YOLOv8 TensorRT
-python scripts/export_yolo_tensorrt.py
-```
-
-### 4. Uruchomienie
-
-```bash
-python main.py
+docker-compose -f docker-compose-full.yml up
 ```
 
 ## 📁 Struktura projektu
 
 ```
-streamware-jetson/
-├── main.py                 # Entry point
-├── requirements.txt        # Zależności Python
-├── config.yaml            # Konfiguracja
-│
-├── src/
-│   ├── __init__.py
-│   ├── orchestrator.py    # Główna logika
+streamware-orchestrator/
+├── orchestrator/
+│   ├── main.py                 # Entry point z MQTT + Audio
+│   ├── text2dsl.py             # Konwersja NL ↔ DSL
+│   ├── llm_engine.py           # LLM wrapper (Ollama)
 │   ├── audio/
-│   │   ├── __init__.py
-│   │   ├── stt.py         # Speech-to-Text
-│   │   └── tts.py         # Text-to-Speech
-│   ├── vision/
-│   │   ├── __init__.py
-│   │   └── detector.py    # Detekcja obiektów
-│   └── llm/
-│       ├── __init__.py
-│       └── inference.py   # LLM wrapper
+│   │   ├── stt.py              # Speech-to-Text (Whisper)
+│   │   └── tts.py              # Text-to-Speech (Piper)
+│   ├── adapters/
+│   │   ├── docker_adapter.py   # Docker API
+│   │   ├── sql_adapter.py      # PostgreSQL
+│   │   ├── mqtt_adapter.py     # MQTT client
+│   │   └── firmware_adapter.py # IoT devices
+│   ├── Dockerfile
+│   └── requirements.txt
 │
-├── models/
-│   ├── whisper/           # Faster-Whisper
-│   ├── yolo/              # YOLOv8 TensorRT
-│   └── piper/             # Piper TTS
+├── firmware/
+│   └── sim.py                  # Symulator czujników IoT
 │
-├── scripts/
-│   ├── download_piper_pl.sh
-│   ├── export_yolo_tensorrt.py
-│   └── benchmark.py
+├── docker-compose-single.yml   # Dev deployment
+├── docker-compose-multi.yml    # Staging deployment
+├── docker-compose-full.yml     # Production deployment
 │
-└── tests/
-    ├── test_stt.py
-    ├── test_vision.py
-    └── test_tts.py
+├── config/
+│   ├── config.yaml             # Główna konfiguracja
+│   └── mosquitto.conf          # MQTT broker config
+│
+└── models/                     # Modele AI (pobierane)
+    ├── whisper/
+    └── piper/
 ```
 
-## ⚙️ Konfiguracja
+## ⚙️ Instalacja
+
+### Lokalna (bez Docker)
+
+```bash
+# Klonuj repo
+git clone https://github.com/softreck/streamware-orchestrator.git
+cd streamware-orchestrator
+
+# Virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Zależności
+pip install -r orchestrator/requirements.txt
+
+# Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull phi3:mini
+
+# Uruchom
+python orchestrator/main.py
+```
+
+### Docker (zalecane)
+
+```bash
+docker-compose -f docker-compose-full.yml up --build
+```
+
+## 🎤 Użycie
+
+Po uruchomieniu system nasłuchuje na mikrofonie.
+
+**Przykładowa sesja:**
+
+```
+🎤 Nasłuchuję...
+
+Ty: "Pokaż status kontenerów"
+
+🤖 Orchestrator:
+   DSL: {"action": "docker.status"}
+   Wykonuję...
+   
+🔊 "Masz uruchomione 4 kontenery: backend, frontend, 
+    database i mqtt broker. Wszystkie działają poprawnie."
+
+Ty: "Zrestartuj backend"
+
+🤖 Orchestrator:
+   DSL: {"action": "docker.restart", "target": "backend"}
+   Wykonuję...
+
+🔊 "Kontener backend został zrestartowany pomyślnie."
+```
+
+## 🔧 Konfiguracja
 
 ```yaml
-# config.yaml
+# config/config.yaml
 audio:
-  sample_rate: 16000
-  channels: 1
-  chunk_size: 1024
-  vad_threshold: 0.5
-
-stt:
-  model: "small"
-  language: "pl"
-  beam_size: 5
-  compute_type: "float16"
-
-vision:
-  model: "yolov8n"
-  confidence: 0.5
-  process_every_n_frames: 5
-  resolution: [640, 480]
-
+  stt:
+    model: "small"
+    language: "pl"
+  tts:
+    model: "pl_PL-gosia-medium"
+    
 llm:
+  provider: "ollama"
   model: "phi3:mini"
-  temperature: 0.7
-  max_tokens: 256
-  system_prompt: |
-    Jesteś pomocnym asystentem wizyjno-głosowym.
-    Odpowiadasz krótko i konkretnie po polsku.
-    Masz dostęp do informacji o obiektach widzianych przez kamerę.
+  
+mqtt:
+  broker: "localhost"
+  port: 1883
+  topics:
+    commands: "commands/#"
+    events: "events/#"
+    sensors: "edge/sensors"
 
-tts:
-  model: "pl_PL-gosia-medium"
-  speaker_id: 0
-  length_scale: 1.0
+docker:
+  socket: "unix:///var/run/docker.sock"
+  
+adapters:
+  enabled:
+    - docker
+    - mqtt
+    - sql
 ```
 
-## 🎮 Użycie
+## 📡 MQTT Topics
 
-### Podstawowe komendy głosowe
+| Topic | Kierunek | Opis |
+|-------|----------|------|
+| `commands/{target}` | IN | Komendy do wykonania |
+| `events/{target}` | OUT | Wyniki akcji |
+| `edge/sensors` | IN | Dane z czujników IoT |
+| `audio/stt` | OUT | Rozpoznany tekst |
+| `audio/tts` | IN | Tekst do wymówienia |
 
-| Komenda | Działanie |
-|---------|-----------|
-| "Co widzisz?" | Opis obiektów w polu widzenia |
-| "Ile jest [obiektów]?" | Zliczanie obiektów danego typu |
-| "Gdzie jest [obiekt]?" | Lokalizacja obiektu w kadrze |
-| "Opisz scenę" | Pełny opis widzianej sceny |
-| "Stop" / "Koniec" | Zakończenie sesji |
+## 🔌 Rozszerzanie
 
-### API (opcjonalne)
+### Własny adapter
 
 ```python
-from streamware import Assistant
+# orchestrator/adapters/my_adapter.py
+from .base import BaseAdapter
 
-assistant = Assistant(config="config.yaml")
-assistant.start()
-
-# Programowe zapytanie
-response = assistant.query(
-    text="Co leży na stole?",
-    include_vision=True
-)
-print(response)
+class MyAdapter(BaseAdapter):
+    name = "myservice"
+    
+    def execute(self, dsl: dict) -> dict:
+        action = dsl.get("action")
+        
+        if action == "myservice.hello":
+            return {"status": "ok", "message": "Hello!"}
+        
+        return {"status": "error", "message": "Unknown action"}
 ```
 
-## 📈 Wydajność
-
-| Metryka | Wartość |
-|---------|---------|
-| Latency STT | ~200ms |
-| Latency Vision | ~50ms (co 5 klatek) |
-| Latency LLM | ~300-500ms |
-| **Total latency** | **~600-900ms** |
-| RAM usage | ~5-6GB |
-| GPU usage | ~70-80% |
-
-## 🔌 Rozszerzenia
-
-### Dodanie bufora (z nagrywaniem)
+### Własne komendy DSL
 
 ```python
-# config.yaml
-buffer:
-  enabled: true
-  audio_seconds: 30
-  video_frames: 150  # 5s @ 30fps
+# orchestrator/text2dsl.py - dodaj pattern
+PATTERNS = {
+    ...
+    r"przywitaj się": {"action": "myservice.hello"},
+}
 ```
 
-### Integracja z Home Assistant
+## 📊 Wydajność
 
-```yaml
-# home_assistant.yaml
-homeassistant:
-  enabled: true
-  url: "http://192.168.1.100:8123"
-  token: "${HA_TOKEN}"
-```
-
-### WebSocket API
-
-```yaml
-api:
-  enabled: true
-  host: "0.0.0.0"
-  port: 8765
-```
-
-## 🐛 Troubleshooting
-
-### Problem: Brak dźwięku z mikrofonu
-
-```bash
-# Sprawdź urządzenia
-arecord -l
-# Ustaw domyślne
-export AUDIODEV=hw:1,0
-```
-
-### Problem: CUDA out of memory
-
-```bash
-# Zmniejsz model whisper
-stt:
-  model: "tiny"  # zamiast "small"
-```
-
-### Problem: Niska jakość TTS
-
-```bash
-# Użyj lepszego głosu
-./scripts/download_piper_pl.sh --quality high
-```
+| Komponent | Latency | RAM |
+|-----------|---------|-----|
+| STT (Whisper small) | ~200ms | ~500MB |
+| LLM (Phi-3 Mini) | ~300ms | ~4GB |
+| Text2DSL | <10ms | ~10MB |
+| Docker API | ~50ms | ~20MB |
+| TTS (Piper) | ~100ms | ~200MB |
+| **TOTAL** | **~700ms** | **~5GB** |
 
 ## 📄 Licencja
 
-MIT License - używaj dowolnie w projektach komercyjnych i niekomercyjnych.
-
-## 🤝 Współpraca
-
-Projekt rozwijany przez [Softreck](https://softreck.com) w ramach [prototypowanie.pl](https://prototypowanie.pl).
-
-Issues i PR-y mile widziane!
+MIT License - Softreck / prototypowanie.pl
