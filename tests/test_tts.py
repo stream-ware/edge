@@ -25,7 +25,7 @@ class TestTextToSpeech:
     
     def test_config_parsing(self, tts_config):
         """Test configuration parsing."""
-        from src.audio.tts import TextToSpeech
+        from orchestrator.audio.tts import TextToSpeech
         
         tts = TextToSpeech(tts_config)
         
@@ -36,7 +36,7 @@ class TestTextToSpeech:
     @pytest.mark.asyncio
     async def test_empty_text_handling(self, tts_config):
         """Test handling of empty text."""
-        from src.audio.tts import TextToSpeech
+        from orchestrator.audio.tts import TextToSpeech
         
         tts = TextToSpeech(tts_config)
         tts._use_cli = True  # Skip model loading
@@ -49,7 +49,7 @@ class TestTextToSpeech:
     @pytest.mark.asyncio
     async def test_speaking_state(self, tts_config):
         """Test is_speaking property."""
-        from src.audio.tts import TextToSpeech
+        from orchestrator.audio.tts import TextToSpeech
         
         tts = TextToSpeech(tts_config)
         
@@ -70,7 +70,7 @@ class TestTTSFallback:
     @pytest.mark.asyncio
     async def test_cli_fallback(self, tts_config):
         """Test fallback to CLI mode when model not found."""
-        from src.audio.tts import TextToSpeech
+        from orchestrator.audio.tts import TextToSpeech
         
         tts = TextToSpeech(tts_config)
         await tts.initialize()

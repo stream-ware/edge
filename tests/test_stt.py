@@ -35,7 +35,7 @@ class TestSpeechToText:
     
     def test_config_parsing(self, stt_config, audio_config):
         """Test configuration parsing."""
-        from src.audio.stt import SpeechToText
+        from orchestrator.audio.stt import SpeechToText
         
         stt = SpeechToText(stt_config, audio_config)
         
@@ -46,12 +46,12 @@ class TestSpeechToText:
     @pytest.mark.asyncio
     async def test_initialization(self, stt_config, audio_config):
         """Test STT initialization."""
-        from src.audio.stt import SpeechToText
+        from orchestrator.audio.stt import SpeechToText
         
         stt = SpeechToText(stt_config, audio_config)
         
         # Mock the model loading
-        with patch('src.audio.stt.WhisperModel') as mock_whisper:
+        with patch('orchestrator.audio.stt.WhisperModel') as mock_whisper:
             mock_whisper.return_value = MagicMock()
             await stt.initialize()
             
@@ -66,7 +66,7 @@ class TestSpeechToText:
         audio_config["vad"]["enabled"] = True
         audio_config["vad"]["mode"] = 3
         
-        from src.audio.stt import SpeechToText
+        from orchestrator.audio.stt import SpeechToText
         
         stt = SpeechToText(stt_config, audio_config)
         
