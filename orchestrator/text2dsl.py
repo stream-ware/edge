@@ -191,6 +191,30 @@ class Text2DSL:
              lambda m: {"action": "vision.scan_network"}),
         ]
         
+        # Diagnostic patterns
+        self.diagnostic_patterns = [
+            (r"(dlaczego|why|czemu)\s+(nie działa|not working|nie udało|failed|błąd|error)",
+             lambda m: {"action": "diag.analyze", "context": "last_error"}),
+            
+            (r"(zdiagnozuj|diagnose|sprawdź)\s+(mqtt|docker|sieć|network|sensory|sensors|audio|kamerę|camera|system)",
+             lambda m: {"action": "diag.check", "topic": m.group(2).lower().replace("sieć", "network").replace("sensory", "sensors").replace("kamerę", "camera")}),
+            
+            (r"(napraw|fix|rozwiąż|solve)\s+(.+)",
+             lambda m: {"action": "diag.fix", "problem": m.group(2)}),
+            
+            (r"(wykonaj|run|uruchom)\s+(komendę|command|shell)\s+(.+)",
+             lambda m: {"action": "shell.run", "command": m.group(3)}),
+            
+            (r"(co jest|what is)\s+(nie tak|wrong|zepsute|broken)",
+             lambda m: {"action": "diag.analyze", "context": "last_error"}),
+            
+            (r"(status|stan)\s+(systemu|system)",
+             lambda m: {"action": "diag.check", "topic": "system"}),
+
+            (r"(pokaż|show)\s+(logi|logs)\s+(systemu|system)",
+             lambda m: {"action": "shell.run", "command": "journalctl -n 20 --no-pager"}),
+        ]
+        
         # System patterns
         self.system_patterns = [
             (r"(pomoc|help|co umiesz)",
@@ -245,6 +269,7 @@ class Text2DSL:
         # Kolejność ma znaczenie: komendy IoT/urządzeń (np. "włącz światło")
         # nie mogą zostać błędnie zinterpretowane jako docker.start.
         all_patterns = (
+            self.diagnostic_patterns +
             self.sensor_patterns +
             self.docker_patterns +
             self.sql_patterns +
@@ -472,6 +497,40 @@ class Text2DSL:
         elif action == "system.tts.stop":
             return "Zatrzymuję."
         
+        # Diagnostic responses
+        elif action == "diag.analyze":
+            analysis = dsl.get("analysis", "")
+            suggestion = dsl.get("suggestion", "")
+            if analysis and suggestion:
+                return f"{analysis} {suggestion}"
+            elif analysis:
+                return analysis
+            return "Analizuję problem..."
+        
+        elif action == "diag.check":
+            topic = dsl.get("topic", "system")
+            summary = dsl.get("summary", "")
+            if summary:
+                return summary
+            return f"Sprawdzam {topic}..."
+        
+        elif action == "diag.fix":
+            result = dsl.get("result", "")
+            if result:
+                return result
+            return "Próbuję naprawić..."
+        
+        elif action == "shell.run":
+            output = dsl.get("stdout", "")
+            if status == "rejected":
+                return f"Nie mogę wykonać tej komendy: {dsl.get('error', 'niedozwolona')}"
+            if output:
+                lines = output.split('\n')
+                if len(lines) > 5:
+                    return '\n'.join(lines[:5]) + f"\n... ({len(lines)} linii)"
+                return output
+            return "Wykonano."
+        
         # Generic
         if status == "ok":
             return "Akcja wykonana pomyślnie."
@@ -494,17 +553,18 @@ Czujniki:
 - "Jaka jest temperatura" - odczyt temperatury
 - "Włącz światło w kuchni" - sterowanie
 
+Diagnostyka:
+- "Dlaczego nie działa?" - analiza ostatniego błędu
+- "Zdiagnozuj mqtt/docker/sieć" - sprawdź komponenty
+- "Napraw X" - próba automatycznej naprawy
+
 System:
 - "Pomoc" - ta wiadomość
 - "Koniec" - zakończenie
 
 ENV (.env):
 - "Pokaż env MQTT_BROKER" - odczyt zmiennej
-- "Ustaw env MQTT_BROKER na mqtt" - zapis do .env
-- "Usuń env MQTT_BROKER" - usuń z .env
-- "Pokaż zmienne env" - lista kluczy
-- "Edytuj env" - otwórz edytor .env
-- "Przeładuj env" - wczytaj .env do procesu"""
+- "Ustaw env MQTT_BROKER na mqtt" - zapis do .env"""
     
     def parse_llm_response(self, llm_response: str) -> Optional[Dict[str, Any]]:
         """

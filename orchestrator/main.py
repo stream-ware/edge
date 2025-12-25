@@ -74,6 +74,8 @@ class Orchestrator:
         self._tts_task: Optional[asyncio.Task] = None
         self._last_tts_text: Optional[str] = None
         self._last_tts_time: float = 0.0
+        self._last_error: Optional[Dict[str, Any]] = None
+        self._last_command: Optional[str] = None
 
         barge_in_cfg = (self.config.get("audio", {}) or {}).get("barge_in", {}) or {}
         self._barge_in_enabled = bool(barge_in_cfg.get("enabled", True))
@@ -267,6 +269,12 @@ class Orchestrator:
                 self.config.get("vision", {})
             )
             await self.adapters["vision"].initialize()
+        
+        self.logger.info("  → Shell Adapter (diagnostics)...")
+        from .adapters.shell_adapter import ShellAdapter
+        shell_cfg = self.config.get("adapters", {}).get("shell", {})
+        self.adapters["shell"] = ShellAdapter(shell_cfg)
+        await self.adapters["shell"].initialize()
     
     async def run(self):
         """Główna pętla działania."""
