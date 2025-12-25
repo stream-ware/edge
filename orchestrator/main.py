@@ -105,6 +105,13 @@ class Orchestrator:
         except ImportError:
             return
 
+        try:
+            p = Path(env_file)
+            if p.exists() and p.is_dir():
+                env_file = str(p / "streamware.env")
+        except Exception:
+            pass
+
         load_dotenv(env_file, override=False)
 
     def _apply_env_overrides(self, config: dict) -> None:

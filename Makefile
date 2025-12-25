@@ -1,7 +1,7 @@
 # Streamware - Makefile
 # Unified build system for Docker/Enterprise and Embedded/Standalone modes
 
-.PHONY: help install run test test-cov lint clean docker-dev docker-prod docker-stop benchmark models
+.PHONY: help install run test test-cov lint clean docker-dev docker-prod docker-stop benchmark models stop stop-local
 
 # Default target
 help:
@@ -91,11 +91,11 @@ docker-build:
 # Development (with build cache)
 docker-dev:
 	DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
-		docker-compose -f docker-compose-single.yml up --build
+		docker-compose -f docker-compose-single.yml up --build --remove-orphans
 
 # Development (no rebuild - fastest restart)
 docker-up:
-	docker-compose -f docker-compose-single.yml up
+	docker-compose -f docker-compose-single.yml up --remove-orphans
 
 # Production (detached, cached build)
 docker-prod:
@@ -108,12 +108,19 @@ docker-restart:
 
 docker-multi:
 	DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
-		docker-compose -f docker-compose-multi.yml up --build
+		docker-compose -f docker-compose-multi.yml up --build --remove-orphans
 
 docker-stop:
-	docker-compose -f docker-compose-single.yml down 2>/dev/null || true
-	docker-compose -f docker-compose-full.yml down 2>/dev/null || true
-	docker-compose -f docker-compose-multi.yml down 2>/dev/null || true
+	docker-compose -f docker-compose-single.yml down --remove-orphans 2>/dev/null || true
+	docker-compose -f docker-compose-full.yml down --remove-orphans 2>/dev/null || true
+	docker-compose -f docker-compose-multi.yml down --remove-orphans 2>/dev/null || true
+
+stop: docker-stop stop-local
+
+stop-local:
+	@pkill -f "python.*-m orchestrator.main" 2>/dev/null || true
+	@pkill -f "python.*firmware/sim.py" 2>/dev/null || true
+	@pkill -f "python.*scripts/benchmark.py" 2>/dev/null || true
 
 docker-logs:
 	docker-compose -f docker-compose-single.yml logs -f orchestrator

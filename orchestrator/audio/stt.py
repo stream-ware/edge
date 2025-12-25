@@ -52,7 +52,7 @@ class SpeechToText:
         # Components
         self.model: Optional[WhisperModel] = None
         self.vad = None
-        self.stream = None
+        self._input_stream = None
         
         # Buffers
         self.speech_buffer: list = []
@@ -96,9 +96,9 @@ class SpeechToText:
     async def cleanup(self):
         """Zwolnienie zasobów."""
         self._running = False
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
+        if self._input_stream:
+            self._input_stream.stop()
+            self._input_stream.close()
     
     async def stream(self) -> AsyncIterator[str]:
         """Generator transkrypcji."""
@@ -116,14 +116,14 @@ class SpeechToText:
             self._audio_queue.put(indata.copy())
         
         try:
-            self.stream = sd.InputStream(
+            self._input_stream = sd.InputStream(
                 samplerate=self.sample_rate,
                 channels=self.channels,
                 dtype=np.int16,
                 blocksize=frame_size,
                 callback=audio_callback
             )
-            self.stream.start()
+            self._input_stream.start()
         except Exception as e:
             self.logger.error(f"Cannot open audio stream: {e}")
             return

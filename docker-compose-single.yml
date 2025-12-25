@@ -10,7 +10,7 @@ services:
       - "1883:1883"
       - "9001:9001"
     volumes:
-      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
       - mqtt_data:/mosquitto/data
     networks:
       - streamware
@@ -27,9 +27,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      cache_from:
-        - streamware-orchestrator:latest
     image: streamware-orchestrator:latest
+    pull_policy: never
     container_name: streamware-orchestrator
     environment:
       - MQTT_BROKER=${MQTT_BROKER:-mqtt}
@@ -41,7 +40,10 @@ services:
       - ./config:/app/config:ro
       - ./models:/app/models:ro
       - ./.env:/app/.env
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: "0:0"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       mqtt:
         condition: service_healthy
@@ -54,7 +56,7 @@ services:
     image: nginx:alpine
     container_name: webapp
     ports:
-      - "8080:80"
+      - "${WEBAPP_PORT:-8081}:80"
     networks:
       - streamware
     restart: unless-stopped

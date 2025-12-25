@@ -14,7 +14,7 @@ services:
       - "1883:1883"
       - "8883:8883"
     volumes:
-      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
       - mqtt_data:/mosquitto/data
     networks:
       - streamware
@@ -35,9 +35,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      cache_from:
-        - streamware-orchestrator:latest
     image: streamware-orchestrator:latest
+    pull_policy: never
     container_name: orchestrator
     environment:
       - MQTT_BROKER=${MQTT_BROKER:-mqtt}
@@ -53,7 +52,10 @@ services:
       - ./config:/app/config:ro
       - ./models:/app/models:ro
       - ./.env:/app/.env
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: "0:0"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       mqtt:
         condition: service_healthy
@@ -166,35 +168,35 @@ services:
   # ============================================
   
   # Prometheus
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    ports:
-      - "9090:9090"
-    networks:
-      - streamware
-    restart: unless-stopped
-    profiles:
-      - monitoring
-
-  # Grafana
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
-    volumes:
-      - grafana_data:/var/lib/grafana
-    ports:
-      - "3000:3000"
-    networks:
-      - streamware
-    restart: unless-stopped
-    profiles:
-      - monitoring
+#  prometheus:
+#    image: prom/prometheus:latest
+#    container_name: prometheus
+#    volumes:
+#      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+#      - prometheus_data:/prometheus
+#    ports:
+#      - "9090:9090"
+#    networks:
+#      - streamware
+#    restart: unless-stopped
+#    profiles:
+#      - monitoring
+#
+#  # Grafana
+#  grafana:
+#    image: grafana/grafana:latest
+#    container_name: grafana
+#    environment:
+#      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+#    volumes:
+#      - grafana_data:/var/lib/grafana
+#    ports:
+#      - "3000:3000"
+#    networks:
+#      - streamware
+#    restart: unless-stopped
+#    profiles:
+#      - monitoring
 
 networks:
   streamware:
@@ -205,5 +207,5 @@ volumes:
   mqtt_logs:
   db_data:
 #  ollama_data:
-  prometheus_data:
-  grafana_data:
+#  prometheus_data:
+#  grafana_data:

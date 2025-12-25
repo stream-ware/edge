@@ -26,6 +26,8 @@ class EnvAdapter:
     def __init__(self, config: Optional[dict] = None):
         config = config or {}
         self.env_path = Path(config.get("path", ".env"))
+        if self.env_path.exists() and self.env_path.is_dir():
+            self.env_path = self.env_path / "streamware.env"
         self.editor = config.get("editor")
 
     async def initialize(self):
