@@ -39,7 +39,7 @@ services:
     environment:
       - MQTT_BROKER=mqtt
       - MQTT_PORT=1883
-      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_HOST=http://localhost:11434
       - DB_HOST=db
       - DB_PORT=5432
       - DB_USER=streamware
@@ -51,30 +51,30 @@ services:
     depends_on:
       mqtt:
         condition: service_healthy
-      ollama:
-        condition: service_started
+#      ollama:
+#        condition: service_started
     networks:
       - streamware
     restart: always
 
   # Ollama LLM Server
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    volumes:
-      - ollama_data:/root/.ollama
-    ports:
-      - "11434:11434"
-    networks:
-      - streamware
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: always
+#  ollama:
+#    image: ollama/ollama:latest
+#    container_name: ollama
+#    volumes:
+#      - ollama_data:/root/.ollama
+#    ports:
+#      - "11434:11434"
+#    networks:
+#      - streamware
+#    deploy:
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              count: 1
+#              capabilities: [gpu]
+#    restart: always
 
   # ============================================
   # EDGE / IoT SIMULATION
@@ -200,6 +200,6 @@ volumes:
   mqtt_data:
   mqtt_logs:
   db_data:
-  ollama_data:
+#  ollama_data:
   prometheus_data:
   grafana_data:

@@ -1,4 +1,14 @@
-# Streamware Orchestrator Configuration
+# Streamware - Unified Configuration
+# Supports both Docker/Enterprise and Embedded/Standalone modes
+#
+# MODE SELECTION:
+#   mode: "docker"    - Docker/Enterprise with MQTT, container control
+#   mode: "embedded"  - Embedded/Standalone for Jetson/Edge devices
+#
+# ============================================
+# DEPLOYMENT MODE
+# ============================================
+mode: "docker"  # "docker" or "embedded"
 
 # ============================================
 # AUDIO SETTINGS
@@ -127,3 +137,20 @@ text2dsl:
 logging:
   level: "INFO"
   format: "%(asctime)s | %(levelname)-8s | %(name)-15s | %(message)s"
+
+# ============================================
+# EMBEDDED MODE SETTINGS (Jetson/Edge)
+# ============================================
+embedded:
+  # Jetson power mode (0=MAXN, 1=15W, 2=7W)
+  power_mode: 0
+  
+  # GPU memory fraction
+  gpu_memory_fraction: 0.8
+  
+  # TensorRT optimization
+  use_tensorrt: true
+  
+  # GStreamer for cameras
+  use_gstreamer: true
+  use_hw_decode: true

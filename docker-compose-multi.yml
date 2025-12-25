@@ -23,7 +23,7 @@ services:
     environment:
       - MQTT_BROKER=mqtt
       - MQTT_PORT=1883
-      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_HOST=http://localhost:11434
       - DB_HOST=db
       - DB_PORT=5432
     volumes:
@@ -32,27 +32,27 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - mqtt
-      - ollama
+#      - ollama
     networks:
       - streamware
     restart: unless-stopped
 
   # Ollama LLM
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    volumes:
-      - ollama_data:/root/.ollama
-    networks:
-      - streamware
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
+#  ollama:
+#    image: ollama/ollama:latest
+#    container_name: ollama
+#    volumes:
+#      - ollama_data:/root/.ollama
+#    networks:
+#      - streamware
+#    deploy:
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              count: 1
+#              capabilities: [gpu]
+#    restart: unless-stopped
 
   # PostgreSQL Database
   db:
@@ -105,4 +105,4 @@ networks:
 volumes:
   mqtt_data:
   db_data:
-  ollama_data:
+#  ollama_data:
