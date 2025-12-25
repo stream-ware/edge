@@ -19,6 +19,8 @@ import sys
 import json
 import os
 import re
+import time
+import difflib
 from pathlib import Path
 from typing import Optional, Dict, Any, TYPE_CHECKING
 
@@ -69,6 +71,14 @@ class Orchestrator:
         # Stan
         self.running = False
         self.muted = False
+        self._tts_task: Optional[asyncio.Task] = None
+        self._last_tts_text: Optional[str] = None
+        self._last_tts_time: float = 0.0
+
+        barge_in_cfg = (self.config.get("audio", {}) or {}).get("barge_in", {}) or {}
+        self._barge_in_enabled = bool(barge_in_cfg.get("enabled", True))
+        self._barge_in_trigger = str(barge_in_cfg.get("trigger", "transcript") or "transcript").strip().lower()
+        self._echo_suppression_enabled = bool(barge_in_cfg.get("echo_suppression", True))
     
     def _load_config(self, path: str) -> dict:
         """Wczytanie konfiguracji."""
@@ -196,9 +206,12 @@ class Orchestrator:
         if self.config.get("audio", {}).get("enabled", True):
             self.logger.info("  → Audio STT (lazy loading)...")
             from .audio.stt import SpeechToText
+
+            on_speech_start = self._on_speech_start if (self._barge_in_enabled and self._barge_in_trigger == "vad") else None
             self.stt = SpeechToText(
                 self.config.get("audio", {}).get("stt", {}),
-                self.config.get("audio", {})
+                self.config.get("audio", {}),
+                on_speech_start=on_speech_start
             )
             await self.stt.initialize()
             
@@ -287,12 +300,20 @@ class Orchestrator:
     async def stop(self):
         """Zatrzymanie orchestratora."""
         self.running = False
+
+        if self._tts_task and not self._tts_task.done():
+            self._tts_task.cancel()
+        self._tts_task = None
     
     async def cleanup(self):
         """Zwolnienie zasobów."""
         if self.stt:
             await self.stt.cleanup()
         if self.tts:
+            try:
+                await self.tts.stop()
+            except Exception:
+                pass
             await self.tts.cleanup()
         if self.llm:
             await self.llm.cleanup()
@@ -314,6 +335,13 @@ class Orchestrator:
                 break
             
             if transcript and transcript.strip():
+                if self.tts and self.tts.is_speaking:
+                    if self._is_echo_transcript(transcript):
+                        continue
+
+                    if self._barge_in_enabled and self._barge_in_trigger == "transcript":
+                        self._stop_tts_playback()
+
                 self.logger.info(f"🎤 STT: {transcript}")
                 
                 # Publikuj na MQTT (jeśli włączone)
@@ -340,7 +368,45 @@ class Orchestrator:
     async def _on_mqtt_tts(self, topic: str, payload: str):
         """Callback dla TTS przez MQTT."""
         if self.tts and not self.muted:
-            await self.tts.speak(payload)
+            self._start_tts(payload)
+
+    def _on_speech_start(self):
+        if not self._barge_in_enabled or self._barge_in_trigger != "vad":
+            return
+        self._stop_tts_playback()
+
+    def _stop_tts_playback(self) -> None:
+        if self.tts and self.tts.is_speaking:
+            asyncio.create_task(self.tts.stop())
+
+        if self._tts_task and not self._tts_task.done():
+            self._tts_task.cancel()
+        self._tts_task = None
+
+    def _norm_text(self, text: str) -> str:
+        t = (text or "").lower()
+        t = re.sub(r"\s+", " ", t)
+        t = re.sub(r"[^a-z0-9ąćęłńóśźż ]+", "", t)
+        return t.strip()
+
+    def _is_echo_transcript(self, transcript: str) -> bool:
+        if not self._echo_suppression_enabled:
+            return False
+        if not self._last_tts_text:
+            return False
+        if (time.time() - self._last_tts_time) > 10.0:
+            return False
+
+        a = self._norm_text(transcript)
+        b = self._norm_text(self._last_tts_text)
+        if not a or not b:
+            return False
+
+        if a in b or b in a:
+            return True
+
+        ratio = difflib.SequenceMatcher(None, a, b).ratio()
+        return ratio >= 0.78
     
     # =========================================
     # COMMAND PROCESSING
@@ -416,6 +482,29 @@ class Orchestrator:
         
         elif action == "system.mute":
             self.muted = True
+            if self.tts:
+                try:
+                    await self.tts.stop()
+                except Exception:
+                    pass
+            if self._tts_task and not self._tts_task.done():
+                self._tts_task.cancel()
+            self._tts_task = None
+            return {"action": action, "status": "ok"}
+
+        elif action == "system.unmute":
+            self.muted = False
+            return {"action": action, "status": "ok"}
+
+        elif action == "system.tts.stop":
+            if self.tts:
+                try:
+                    await self.tts.stop()
+                except Exception:
+                    pass
+            if self._tts_task and not self._tts_task.done():
+                self._tts_task.cancel()
+            self._tts_task = None
             return {"action": action, "status": "ok"}
         
         elif action == "system.help":
@@ -469,9 +558,10 @@ class Orchestrator:
         dsl: dict = None
     ):
         """Wysłanie odpowiedzi do odpowiedniego kanału."""
-        # TTS (jeśli źródło audio i nie wyciszony)
         if source == "audio" and self.tts and not self.muted:
-            await self.tts.speak(response)
+            action = (dsl.get("action") if dsl else None)
+            if action != "system.tts.stop":
+                self._start_tts(self._tts_text(response))
         
         # MQTT
         if self.mqtt:
@@ -484,6 +574,28 @@ class Orchestrator:
                 "source": source
             }
             await self.mqtt.publish(f"events/{target}", json.dumps(event_data))
+
+    def _tts_text(self, text: str) -> str:
+        if not text:
+            return text
+        one_line = " ".join([t.strip() for t in text.splitlines() if t.strip()])
+        if len(one_line) <= 240:
+            return one_line
+        return one_line[:240] + "..."
+
+    def _start_tts(self, text: str) -> None:
+        if not self.tts or not text:
+            return
+
+        self._last_tts_text = text
+        self._last_tts_time = time.time()
+
+        if self._tts_task and not self._tts_task.done():
+            asyncio.create_task(self.tts.stop())
+            self._tts_task.cancel()
+            self._tts_task = None
+
+        self._tts_task = asyncio.create_task(self.tts.speak(text))
 
 
 def setup_logging(level: str = "INFO"):

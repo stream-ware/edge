@@ -33,7 +33,7 @@ except ImportError:
 class SpeechToText:
     """Streaming STT z VAD i autodetekcją GPU/CPU."""
     
-    def __init__(self, stt_config: dict = None, audio_config: dict = None):
+    def __init__(self, stt_config: dict = None, audio_config: dict = None, on_speech_start=None):
         self.logger = logging.getLogger("stt")
         
         # Use settings as defaults, allow config overrides
@@ -83,6 +83,7 @@ class SpeechToText:
         # State
         self.is_speaking = False
         self.silence_frames = 0
+        self._on_speech_start = on_speech_start
 
     def _normalize_input_device(self, value):
         if value is None:
@@ -195,6 +196,13 @@ class SpeechToText:
                     pass
             
             if is_speech:
+                if not self.is_speaking and self._on_speech_start:
+                    try:
+                        result = self._on_speech_start()
+                        if asyncio.iscoroutine(result):
+                            asyncio.create_task(result)
+                    except Exception:
+                        pass
                 self.silence_frames = 0
                 self.speech_buffer.append(audio_chunk)
                 self.is_speaking = True

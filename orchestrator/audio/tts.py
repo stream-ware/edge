@@ -44,6 +44,8 @@ class TextToSpeech:
         self._use_cli = False
         self._is_speaking = False
         self._lock = asyncio.Lock()
+        self._stop_requested = False
+        self._current_proc = None
     
     async def initialize(self):
         """Inicjalizacja TTS."""
@@ -70,6 +72,21 @@ class TextToSpeech:
     async def cleanup(self):
         """Zwolnienie zasobów."""
         self.voice = None
+
+    async def stop(self):
+        self._stop_requested = True
+        if sd is not None:
+            try:
+                sd.stop()
+            except Exception:
+                pass
+
+        proc = self._current_proc
+        if proc is not None and getattr(proc, "returncode", None) is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
     
     async def speak(self, text: str):
         """Synteza i odtworzenie tekstu."""
@@ -81,6 +98,7 @@ class TextToSpeech:
             return
         
         async with self._lock:
+            self._stop_requested = False
             self._is_speaking = True
             
             try:
@@ -101,6 +119,9 @@ class TextToSpeech:
         loop = asyncio.get_event_loop()
         
         audio = await loop.run_in_executor(None, self._synthesize, text)
+
+        if self._stop_requested:
+            return
         
         if audio is not None and len(audio) > 0:
             await loop.run_in_executor(None, self._play, audio)
@@ -142,13 +163,20 @@ class TextToSpeech:
             # Próbuj Piper CLI
             cmd = f'echo "{text}" | piper --model {self.model_name} --output_file {temp_path} 2>/dev/null'
             proc = await asyncio.create_subprocess_shell(cmd)
+            self._current_proc = proc
             await proc.communicate()
+            self._current_proc = None
             
             if proc.returncode != 0 or not os.path.exists(temp_path):
                 # Fallback do espeak
                 cmd = f'espeak-ng -v pl "{text}" --stdout > {temp_path} 2>/dev/null'
                 proc = await asyncio.create_subprocess_shell(cmd)
+                self._current_proc = proc
                 await proc.communicate()
+                self._current_proc = None
+
+            if self._stop_requested:
+                return
             
             if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
                 data, rate = sf.read(temp_path)
@@ -158,6 +186,7 @@ class TextToSpeech:
         except Exception as e:
             self.logger.error(f"CLI TTS error: {e}")
         finally:
+            self._current_proc = None
             try:
                 os.unlink(temp_path)
             except:

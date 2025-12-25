@@ -201,6 +201,12 @@ class Text2DSL:
             
             (r"(cicho|mute|wycisz)",
              lambda m: {"action": "system.mute"}),
+
+            (r"(odcisz|unmute|mów|wznów głos)",
+             lambda m: {"action": "system.unmute"}),
+
+            (r"(zatrzymaj tts|stop tts|przerwij mówienie|przerwij głos)",
+             lambda m: {"action": "system.tts.stop"}),
         ]
     
     def nl_to_dsl(self, text: str) -> Optional[Dict[str, Any]]:
@@ -459,6 +465,12 @@ class Text2DSL:
         
         elif action == "system.mute":
             return "Wyciszam."
+
+        elif action == "system.unmute":
+            return "Odciszam."
+
+        elif action == "system.tts.stop":
+            return "Zatrzymuję."
         
         # Generic
         if status == "ok":

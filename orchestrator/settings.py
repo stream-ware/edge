@@ -316,21 +316,16 @@ class Settings:
 
         mode = getattr(os, "RTLD_GLOBAL", 0) | getattr(os, "RTLD_NOW", 0)
 
-        def _can_load_any(candidates: list[str]) -> bool:
+        def _load_any(candidates: list[str]):
             for cand in candidates:
                 if not cand:
                     continue
                 try:
-                    ctypes.CDLL(cand, mode=mode)
-                    return True
+                    return ctypes.CDLL(cand, mode=mode)
                 except OSError:
                     continue
-            return False
+            return None
 
-        # IMPORTANT:
-        # CTranslate2 (used by faster-whisper) loads cuDNN by SONAME at runtime.
-        # If the dynamic linker can't resolve these names, it can abort the process.
-        # Therefore we only return True when BOTH core + ops libs are loadable by name.
         core_candidates = [
             ctypes.util.find_library("cudnn"),
             "libcudnn.so.9",
@@ -345,19 +340,24 @@ class Settings:
             "libcudnn_ops.so",
         ]
 
-        core_ok = _can_load_any(core_candidates)
-        ops_ok = _can_load_any(ops_candidates)
+        core = _load_any(core_candidates)
+        ops = _load_any(ops_candidates)
 
-        if core_ok and ops_ok:
-            return True
+        if core is None or ops is None:
+            allow_pip = _get_env("STREAMWARE__GPU__ALLOW_PIP_CUDNN", False, bool)
+            if allow_pip and self._try_preload_cudnn_from_pip(mode=mode):
+                core = _load_any(core_candidates)
+                ops = _load_any(ops_candidates)
 
-        allow_pip = _get_env("STREAMWARE__GPU__ALLOW_PIP_CUDNN", False, bool)
-        if allow_pip and self._try_preload_cudnn_from_pip(mode=mode):
-            core_ok = _can_load_any(core_candidates)
-            ops_ok = _can_load_any(ops_candidates)
-            return core_ok and ops_ok
+        if core is None or ops is None:
+            return False
 
-        return False
+        try:
+            getattr(core, "cudnnCreateTensorDescriptor")
+        except Exception:
+            return False
+
+        return True
     
     def _try_preload_cudnn_from_pip(self, mode: int = 0) -> bool:
         """Try to preload cuDNN from nvidia-cudnn-cu12 pip package."""
@@ -384,6 +384,11 @@ class Settings:
         lib_dir = os.path.join(pkg_dir, "lib")
         if not os.path.isdir(lib_dir):
             return False
+
+        existing = os.environ.get("LD_LIBRARY_PATH", "")
+        parts = [p for p in existing.split(":") if p]
+        if lib_dir not in parts:
+            os.environ["LD_LIBRARY_PATH"] = ":".join([lib_dir] + parts)
         
         import ctypes
 
