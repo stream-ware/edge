@@ -193,7 +193,10 @@ class Text2DSL:
         
         # Diagnostic patterns
         self.diagnostic_patterns = [
-            (r"(dlaczego|why|czemu)\s+(nie działa|not working|nie udało|failed|błąd|error)",
+            (r"^(dlaczego|why|czemu)[?!.]*$",
+             lambda m: {"action": "diag.analyze", "context": "last_error"}),
+            
+            (r"(dlaczego|why|czemu)\s+(nie działa|not working|nie udało|failed|błąd|error|to|tak)",
              lambda m: {"action": "diag.analyze", "context": "last_error"}),
             
             (r"(zdiagnozuj|diagnose|sprawdź)\s+(mqtt|docker|sieć|network|sensory|sensors|audio|kamerę|camera|system)",
@@ -211,8 +214,11 @@ class Text2DSL:
             (r"(status|stan)\s+(systemu|system)",
              lambda m: {"action": "diag.check", "topic": "system"}),
 
-            (r"(pokaż|show)\s+(logi|logs)\s+(systemu|system)",
-             lambda m: {"action": "shell.run", "command": "journalctl -n 20 --no-pager"}),
+            (r"(pokaż|show|analizuj|analyze)\s+(logi|logs)\s*(systemu|system)?",
+             lambda m: {"action": "diag.logs"}),
+            
+            (r"(co się dzieje|what.s happening|status logów)",
+             lambda m: {"action": "diag.logs"}),
         ]
         
         # System patterns
@@ -519,6 +525,12 @@ class Text2DSL:
             if result:
                 return result
             return "Próbuję naprawić..."
+        
+        elif action == "diag.logs":
+            analysis = dsl.get("analysis", "")
+            if analysis:
+                return analysis
+            return "Analizuję logi..."
         
         elif action == "shell.run":
             output = dsl.get("stdout", "")

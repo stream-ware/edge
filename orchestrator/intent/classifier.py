@@ -43,8 +43,16 @@ class Intent:
     entities: Dict[str, Any] = field(default_factory=dict)
     requires_clarification: bool = False
     clarification_prompt: Optional[str] = None
+    clarification_options: List[str] = field(default_factory=list)
     raw_text: str = ""
     source: str = "unknown"
+    
+    def with_options(self, prompt: str, options: List[str]) -> 'Intent':
+        """Helper do tworzenia intencji z opcjami wyboru."""
+        self.requires_clarification = True
+        self.clarification_prompt = prompt
+        self.clarification_options = options
+        return self
 
 
 @dataclass
@@ -156,6 +164,12 @@ class IntentClassifier:
         (r"^(nie|no|nope)\s*[?!.]?$", Domain.CONVERSATION, "deny", {}),
     ]
     
+    CONTEXT_QUESTION_PATTERNS = [
+        r"^(dlaczego|czemu|why)\s*[?!.]?$",
+        r"^(co|what)\s+(to|się stało|happened)\s*[?!.]?$",
+        r"^(jak|how)\s+(to naprawić|to fix)\s*[?!.]?$",
+    ]
+    
     def __init__(self, llm_engine=None, config: dict = None):
         self.logger = logging.getLogger("intent_classifier")
         self.llm = llm_engine
@@ -192,16 +206,25 @@ FORMAT ODPOWIEDZI:
         Klasyfikuj intencję użytkownika.
         
         Workflow:
-        1. Fast pattern match
-        2. LLM classification
-        3. Context inference
-        4. Clarification
+        1. Context-dependent questions (jeśli jest kontekst)
+        2. Fast pattern match
+        3. LLM classification
+        4. Context inference
+        5. Clarification
         """
         text = text.strip()
         if not text:
             return Intent(Domain.UNKNOWN, "empty", confidence=0.0, raw_text=text)
         
         text_lower = text.lower()
+        
+        # 0. Context-dependent questions (krótkie pytania gdy jest kontekst błędu)
+        if self.context.last_error:
+            for pattern in self.CONTEXT_QUESTION_PATTERNS:
+                if re.match(pattern, text_lower):
+                    self.logger.debug(f"Context question: {text} -> diag.analyze (last_error)")
+                    return Intent(Domain.DIAG, "analyze", confidence=0.9, 
+                                 entities={"context": "last_error"}, raw_text=text, source="context")
         
         # 1. Fast pattern match dla znanych fraz
         for pattern, domain, action, entities in self.FAST_PATTERNS:
@@ -222,15 +245,8 @@ FORMAT ODPOWIEDZI:
         if intent and intent.confidence >= 0.4:
             return intent
         
-        # 4. Fallback - ask for clarification
-        return Intent(
-            Domain.UNKNOWN, "unclear",
-            confidence=0.2,
-            requires_clarification=True,
-            clarification_prompt="Nie rozumiem. Czy chodzi ci o Docker, czujniki, czy coś innego?",
-            raw_text=text,
-            source="fallback"
-        )
+        # 4. Fallback - proaktywne propozycje zamiast "nie rozumiem"
+        return self._generate_proactive_response(text)
     
     async def _llm_classify(self, text: str) -> Optional[Intent]:
         """Klasyfikacja przez LLM."""
@@ -281,9 +297,17 @@ Odpowiedz TYLKO JSON:"""
     
     def _context_inference(self, text: str) -> Optional[Intent]:
         """Inferuj intencję z kontekstu."""
-        text_lower = text.lower()
+        text_lower = text.lower().strip().rstrip("?!.")
         
-        # Pytania o błąd
+        # Krótkie pytania kontekstowe (1-2 słowa)
+        short_question_words = ["dlaczego", "czemu", "why", "co", "jak", "kiedy"]
+        words = text_lower.split()
+        if len(words) <= 2 and any(w in text_lower for w in short_question_words):
+            if self.context.last_error:
+                return Intent(Domain.DIAG, "analyze", confidence=0.85, 
+                             entities={"context": "last_error"}, raw_text=text, source="context")
+        
+        # Pytania o błąd (dłuższe)
         if any(w in text_lower for w in ["dlaczego", "czemu", "why", "błąd", "error", "nie działa"]):
             if self.context.last_error:
                 return Intent(Domain.DIAG, "analyze", confidence=0.7, 
@@ -304,6 +328,138 @@ Odpowiedz TYLKO JSON:"""
         
         return None
     
+    def _generate_proactive_response(self, text: str) -> Intent:
+        """Generuj proaktywną odpowiedź z propozycjami zamiast 'nie rozumiem'."""
+        text_lower = text.lower()
+        
+        # Wykryj słowa kluczowe i zaproponuj opcje
+        
+        # Temperatura
+        if any(w in text_lower for w in ["temperatura", "temp", "ciepło", "zimno", "gorąco"]):
+            return Intent(
+                Domain.SENSOR, "read",
+                confidence=0.6,
+                entities={"metric": "temperature"},
+                raw_text=text,
+                source="proactive"
+            ).with_options(
+                "O jaką temperaturę chodzi?",
+                [
+                    "temperatura komputera (CPU/GPU)",
+                    "temperatura otoczenia (czujnik pokojowy)", 
+                    "temperatura urządzenia IoT/SmartHome",
+                    "temperatura z MQTT"
+                ]
+            )
+        
+        # Światło / sterowanie
+        if any(w in text_lower for w in ["światło", "lampa", "żarówka", "włącz", "wyłącz"]):
+            return Intent(
+                Domain.SENSOR, "write",
+                confidence=0.6,
+                entities={"metric": "light"},
+                raw_text=text,
+                source="proactive"
+            ).with_options(
+                "Które urządzenie?",
+                [
+                    "światło w pokoju",
+                    "światło w kuchni",
+                    "wszystkie światła",
+                    "urządzenie SmartHome"
+                ]
+            )
+        
+        # Docker / kontenery
+        if any(w in text_lower for w in ["kontener", "docker", "serwis", "aplikacja", "backend", "frontend"]):
+            return Intent(
+                Domain.DOCKER, "status",
+                confidence=0.5,
+                raw_text=text,
+                source="proactive"
+            ).with_options(
+                "Co chcesz zrobić z kontenerami?",
+                [
+                    "pokaż status wszystkich kontenerów",
+                    "zrestartuj konkretny kontener",
+                    "pokaż logi",
+                    "zatrzymaj kontener"
+                ]
+            )
+        
+        # Błąd / problem - zaproponuj diagnostykę
+        if any(w in text_lower for w in ["problem", "błąd", "nie działa", "zepsute", "napraw"]):
+            return Intent(
+                Domain.DIAG, "check",
+                confidence=0.6,
+                entities={"topic": "system"},
+                raw_text=text,
+                source="proactive"
+            ).with_options(
+                "Mogę pomóc zdiagnozować. Co sprawdzić?",
+                [
+                    "sprawdź cały system",
+                    "sprawdź Docker",
+                    "sprawdź MQTT",
+                    "sprawdź sieć",
+                    "pokaż ostatni błąd"
+                ]
+            )
+        
+        # Sieć / połączenie
+        if any(w in text_lower for w in ["sieć", "internet", "połączenie", "wifi", "ping"]):
+            return Intent(
+                Domain.DIAG, "check",
+                confidence=0.6,
+                entities={"topic": "network"},
+                raw_text=text,
+                source="proactive"
+            ).with_options(
+                "Sprawdzam sieć. Co dokładnie?",
+                [
+                    "sprawdź połączenie internetowe",
+                    "sprawdź lokalne usługi",
+                    "sprawdź MQTT broker",
+                    "pokaż adresy IP"
+                ]
+            )
+        
+        # Jeśli był ostatni błąd - zaproponuj naprawę
+        if self.context.last_error:
+            error_msg = self.context.last_error.get("result", {}).get("error", "")
+            return Intent(
+                Domain.DIAG, "fix",
+                confidence=0.5,
+                entities={"problem": error_msg},
+                raw_text=text,
+                source="proactive"
+            ).with_options(
+                f"Ostatnio wystąpił błąd. Czy chcesz, żebym spróbował naprawić?",
+                [
+                    "tak, napraw automatycznie",
+                    "pokaż analizę problemu",
+                    "zdiagnozuj system",
+                    "nie, to coś innego"
+                ]
+            )
+        
+        # Domyślne - zaproponuj popularne akcje
+        return Intent(
+            Domain.SYSTEM, "suggest",
+            confidence=0.3,
+            raw_text=text,
+            source="proactive"
+        ).with_options(
+            "Nie jestem pewien o co chodzi. Może chodziło ci o:",
+            [
+                "status systemu",
+                "status kontenerów Docker",
+                "temperatura urządzenia",
+                "zdiagnozuj problemy",
+                "pomoc - lista komend"
+            ]
+        )
+    
     def update_context(self, text: str, intent: Intent, response: str):
         """Aktualizuj kontekst konwersacji."""
         self.context.add_turn(text, intent, response)
@@ -314,7 +470,22 @@ Odpowiedz TYLKO JSON:"""
     
     def to_dsl(self, intent: Intent) -> Dict[str, Any]:
         """Konwertuj Intent na DSL."""
-        if intent.domain == Domain.UNKNOWN or intent.requires_clarification:
+        if intent.requires_clarification:
+            dsl = {
+                "action": "system.clarify",
+                "prompt": intent.clarification_prompt or "Powiedz więcej...",
+                "options": intent.clarification_options,
+                "_source": intent.source,
+                "_raw": intent.raw_text,
+                "_confidence": intent.confidence,
+                "_suggested_domain": intent.domain.value,
+                "_suggested_action": intent.action
+            }
+            if intent.entities:
+                dsl["_entities"] = intent.entities
+            return dsl
+        
+        if intent.domain == Domain.UNKNOWN:
             return {
                 "action": "system.clarify",
                 "prompt": intent.clarification_prompt or "Nie rozumiem, powiedz inaczej.",

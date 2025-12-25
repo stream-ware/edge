@@ -29,6 +29,7 @@ import yaml
 from .text2dsl import Text2DSL
 from .llm_engine import LLMEngine
 from .intent import IntentClassifier, Intent, Domain
+from .log_collector import setup_log_collector, ProactiveAnalyzer, LogCollector
 
 # Lazy imports for heavy modules (loaded only when needed)
 if TYPE_CHECKING:
@@ -58,6 +59,10 @@ class Orchestrator:
         self._load_dotenv()
         self.config = self._load_config(config_path)
         self._apply_env_overrides(self.config)
+        
+        # Log collector (zbiera logi dla LLM)
+        self.log_collector: LogCollector = setup_log_collector(on_error=self._on_log_error)
+        self.proactive_analyzer: Optional[ProactiveAnalyzer] = None
         
         # Komponenty
         self.text2dsl = Text2DSL(self.config.get("text2dsl", {}))
@@ -213,6 +218,10 @@ class Orchestrator:
             config=self.config.get("intent", {})
         )
         
+        # Proactive Analyzer (LLM + logi)
+        self.logger.info("  → Proactive Analyzer...")
+        self.proactive_analyzer = ProactiveAnalyzer(self.log_collector, self.llm)
+        
         # Audio - lazy import (heavy: whisper, piper)
         if self.config.get("audio", {}).get("enabled", True):
             self.logger.info("  → Audio STT (lazy loading)...")
@@ -367,6 +376,9 @@ class Orchestrator:
                 
                 # Przetwórz komendę
                 await self.process_command(transcript, source="audio")
+                
+                # Sprawdź proaktywne sugestie po przetworzeniu komendy
+                await self._check_proactive_suggestions()
     
     # =========================================
     # MQTT CALLBACKS
@@ -424,6 +436,21 @@ class Orchestrator:
 
         ratio = difflib.SequenceMatcher(None, a, b).ratio()
         return ratio >= 0.78
+    
+    def _on_log_error(self, entry):
+        """Callback wywoływany przy każdym błędzie w logach."""
+        # Można tu dodać natychmiastowe reakcje na błędy
+        pass
+    
+    async def _check_proactive_suggestions(self):
+        """Sprawdź czy LLM ma coś do powiedzenia na podstawie logów."""
+        if not self.proactive_analyzer:
+            return
+        
+        suggestion = await self.proactive_analyzer.should_speak_suggestion()
+        if suggestion and self.tts and not self.muted:
+            self.logger.info(f"💡 Proaktywna sugestia: {suggestion[:100]}...")
+            self._start_tts(f"Zauważyłem problem. {suggestion}")
     
     # =========================================
     # COMMAND PROCESSING
@@ -496,8 +523,8 @@ class Orchestrator:
         action = dsl.get("action") or ""
         
         if action == "system.clarify":
-            response = dsl.get("prompt", "Nie rozumiem.")
-            await self._output_response(response, source)
+            response = self._format_clarification(dsl)
+            await self._output_response(response, source, dsl)
             return response
         elif action.startswith("system."):
             result = await self._handle_system_command(dsl)
@@ -630,16 +657,46 @@ Odpowiedz po polsku, krótko i konkretnie."""
                 return {"action": action, "status": "ok", "topic": topic, "summary": summary}
             return {"action": action, "status": "error", "error": "Shell adapter niedostępny"}
         
-        elif action == "diag.analyze":
-            if not self._last_error:
-                return {"action": action, "status": "ok", "analysis": "Nie było ostatniego błędu do analizy."}
+        elif action == "diag.logs":
+            # Pokaż logi z kontekstem LLM
+            log_context = self.log_collector.get_context_for_llm(include_all=True)
             
-            error_info = self._last_error
-            error_msg = error_info.get("result", {}).get("error", "nieznany błąd")
+            if self.llm:
+                prompt = f"""Przeanalizuj logi systemu i powiedz co się dzieje. Skup się na błędach i ostrzeżeniach.
+
+{log_context}
+
+Odpowiedz po polsku:
+1. Główne problemy (jeśli są)
+2. Co działa poprawnie
+3. Sugestie naprawy (jeśli potrzebne)"""
+                
+                analysis = await self.llm.generate(prompt)
+                if analysis:
+                    return {"action": action, "status": "ok", "analysis": analysis.strip()}
+            
+            return {"action": action, "status": "ok", "analysis": log_context[:500]}
+        
+        elif action == "diag.analyze":
+            # Pobierz kontekst logów dla analizy
+            log_context = self.log_collector.get_context_for_llm()
+            
+            if not self._last_error and not log_context.strip():
+                return {"action": action, "status": "ok", "analysis": "System działa poprawnie, brak błędów."}
+            
+            error_info = self._last_error or {}
+            error_msg = error_info.get("result", {}).get("error", "")
             command = error_info.get("command", "")
             dsl_info = error_info.get("dsl", {})
             
-            context_parts = [f"Komenda: {command}", f"Błąd: {error_msg}"]
+            context_parts = []
+            if command:
+                context_parts.append(f"Ostatnia komenda: {command}")
+            if error_msg:
+                context_parts.append(f"Błąd: {error_msg}")
+            
+            # Dodaj kontekst logów
+            context_parts.append(f"\nLOGI SYSTEMU:\n{log_context}")
             
             if shell:
                 action_type = dsl_info.get("action", "").split(".")[0]
@@ -745,6 +802,23 @@ Odpowiedz po polsku, krótko i konkretnie."""
             }
             await self.mqtt.publish(f"events/{target}", json.dumps(event_data))
 
+    def _format_clarification(self, dsl: dict) -> str:
+        """Formatuj odpowiedź z opcjami do wyboru."""
+        prompt = dsl.get("prompt", "Powiedz więcej...")
+        options = dsl.get("options", [])
+        
+        if not options:
+            return prompt
+        
+        # Format dla TTS (krótsza wersja)
+        if len(options) <= 3:
+            options_str = ", ".join(options[:3])
+            return f"{prompt} Na przykład: {options_str}"
+        else:
+            # Dla wielu opcji - tylko 3 pierwsze w TTS
+            options_str = ", ".join(options[:3])
+            return f"{prompt} Na przykład: {options_str}, lub inne."
+    
     def _tts_text(self, text: str) -> str:
         if not text:
             return text
