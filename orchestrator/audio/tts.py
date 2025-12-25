@@ -16,14 +16,15 @@ import numpy as np
 try:
     import sounddevice as sd
     import soundfile as sf
-except ImportError:
+except (ImportError, OSError):
     sd = None
     sf = None
 
 try:
-    from piper import PiperVoice
+    from piper import PiperVoice, SynthesisConfig
 except ImportError:
     PiperVoice = None
+    SynthesisConfig = None
 
 
 class TextToSpeech:
@@ -108,11 +109,15 @@ class TextToSpeech:
         """Synteza tekstu."""
         try:
             audio_list = []
-            for chunk in self.voice.synthesize_stream_raw(
-                text,
-                length_scale=self.length_scale
-            ):
-                audio_list.append(np.frombuffer(chunk, dtype=np.int16))
+            
+            # Configure synthesis
+            syn_config = None
+            if SynthesisConfig:
+                syn_config = SynthesisConfig(length_scale=self.length_scale)
+            
+            # Synthesize chunks
+            for chunk in self.voice.synthesize(text, syn_config=syn_config):
+                audio_list.append(chunk.audio_int16_array)
             
             return np.concatenate(audio_list) if audio_list else None
         except Exception as e:

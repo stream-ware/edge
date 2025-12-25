@@ -1,7 +1,14 @@
 # Streamware - Makefile
 # Unified build system for Docker/Enterprise and Embedded/Standalone modes
 
-.PHONY: help install run test test-cov lint clean docker-dev docker-prod docker-stop benchmark models stop stop-local
+.PHONY: help install run run-web test test-cov lint clean docker-dev docker-prod docker-stop benchmark models stop stop-local venv-reset reinstall
+
+COMPOSE_SINGLE = docker compose -p streamware-single -f docker-compose-single.yml
+COMPOSE_FULL   = docker compose -p streamware-full -f docker-compose-full.yml
+COMPOSE_MULTI  = docker compose -p streamware-multi -f docker-compose-multi.yml
+
+PYTHON ?= /usr/bin/python3
+VENV_PY = venv/bin/python
 
 # Default target
 help:
@@ -42,14 +49,19 @@ help:
 
 install:
 	@echo "Installing Streamware..."
-	@if [ ! -d "venv" ]; then python3 -m venv venv; fi
-	@. venv/bin/activate && pip install --upgrade pip wheel
-	@. venv/bin/activate && pip install -r requirements.txt
+	@if [ ! -d "venv" ]; then $(PYTHON) -m venv venv; fi
+	@$(VENV_PY) -m pip install --upgrade pip wheel
+	@$(VENV_PY) -m pip install -r requirements.txt
 	@echo "✅ Installation complete!"
 	@echo "   Activate venv: source venv/bin/activate"
 
+venv-reset:
+	@rm -rf venv
+
+reinstall: venv-reset install
+
 install-dev: install
-	@. venv/bin/activate && pip install pytest-cov black flake8 mypy
+	@$(VENV_PY) -m pip install pytest-cov black flake8 mypy
 	@echo "✅ Dev dependencies installed"
 
 install-jetson:
@@ -62,7 +74,7 @@ models:
 	@chmod +x scripts/download_piper_pl.sh
 	@./scripts/download_piper_pl.sh medium gosia
 	@echo "Downloading YOLOv8..."
-	@. venv/bin/activate && python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+	@$(VENV_PY) -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 	@echo "✅ Models downloaded"
 
 # ============================================
@@ -70,13 +82,17 @@ models:
 # ============================================
 
 run:
-	@. venv/bin/activate && python -m orchestrator.main
+	@env -u LD_LIBRARY_PATH -u LD_PRELOAD -u CONDA_PREFIX -u CONDA_DEFAULT_ENV -u CONDA_SHLVL -u _CE_CONDA -u _CE_M $(VENV_PY) -m orchestrator.main
 
 run-embedded:
-	@. venv/bin/activate && python -m orchestrator.main config/config-embedded.yaml
+	@env -u LD_LIBRARY_PATH -u LD_PRELOAD -u CONDA_PREFIX -u CONDA_DEFAULT_ENV -u CONDA_SHLVL -u _CE_CONDA -u _CE_M $(VENV_PY) -m orchestrator.main config/config-embedded.yaml
 
 run-docker:
-	@. venv/bin/activate && python -m orchestrator.main config/config.yaml
+	@env -u LD_LIBRARY_PATH -u LD_PRELOAD -u CONDA_PREFIX -u CONDA_DEFAULT_ENV -u CONDA_SHLVL -u _CE_CONDA -u _CE_M $(VENV_PY) -m orchestrator.main config/config.yaml
+
+run-web:
+	@echo "Starting web interface on http://localhost:8000"
+	@env -u LD_LIBRARY_PATH -u LD_PRELOAD -u CONDA_PREFIX -u CONDA_DEFAULT_ENV -u CONDA_SHLVL -u _CE_CONDA -u _CE_M $(VENV_PY) -m orchestrator.web.server
 
 # ============================================
 # DOCKER (Optimized for fast builds/restarts)
@@ -91,39 +107,48 @@ docker-build:
 # Development (with build cache)
 docker-dev:
 	DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
-		docker-compose -f docker-compose-single.yml up --build --remove-orphans
+		$(COMPOSE_SINGLE) up --build --remove-orphans
 
 # Development (no rebuild - fastest restart)
 docker-up:
-	docker-compose -f docker-compose-single.yml up --remove-orphans
+	$(COMPOSE_SINGLE) up --remove-orphans
+
+docker-up-demo:
+	COMPOSE_PROFILES=demo $(COMPOSE_SINGLE) up --remove-orphans
 
 # Production (detached, cached build)
 docker-prod:
 	DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
-		docker-compose -f docker-compose-full.yml up -d --build
+		$(COMPOSE_FULL) up -d --build --remove-orphans
 
 # Production restart (no rebuild)
 docker-restart:
-	docker-compose -f docker-compose-full.yml restart orchestrator
+	$(COMPOSE_FULL) restart orchestrator
 
 docker-multi:
 	DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
-		docker-compose -f docker-compose-multi.yml up --build --remove-orphans
+		$(COMPOSE_MULTI) up --build --remove-orphans
 
 docker-stop:
-	docker-compose -f docker-compose-single.yml down --remove-orphans 2>/dev/null || true
-	docker-compose -f docker-compose-full.yml down --remove-orphans 2>/dev/null || true
-	docker-compose -f docker-compose-multi.yml down --remove-orphans 2>/dev/null || true
+	$(COMPOSE_SINGLE) down --remove-orphans 2>/dev/null || true
+	$(COMPOSE_FULL) down --remove-orphans 2>/dev/null || true
+	$(COMPOSE_MULTI) down --remove-orphans 2>/dev/null || true
 
 stop: docker-stop stop-local
 
 stop-local:
-	@pkill -f "python.*-m orchestrator.main" 2>/dev/null || true
-	@pkill -f "python.*firmware/sim.py" 2>/dev/null || true
-	@pkill -f "python.*scripts/benchmark.py" 2>/dev/null || true
+	@pkill -f -x "python -m orchestrator.main" 2>/dev/null || true
+	@pkill -f -x "python3 -m orchestrator.main" 2>/dev/null || true
+	@pkill -f -x "venv/bin/python -m orchestrator.main" 2>/dev/null || true
+	@pkill -f -x "venv/bin/python -m orchestrator.main config/config.yaml" 2>/dev/null || true
+	@pkill -f -x "venv/bin/python -m orchestrator.main config/config-embedded.yaml" 2>/dev/null || true
+	@pkill -f -x "python firmware/sim.py" 2>/dev/null || true
+	@pkill -f -x "python3 firmware/sim.py" 2>/dev/null || true
+	@pkill -f -x "python scripts/benchmark.py" 2>/dev/null || true
+	@pkill -f -x "python3 scripts/benchmark.py" 2>/dev/null || true
 
 docker-logs:
-	docker-compose -f docker-compose-single.yml logs -f orchestrator
+	$(COMPOSE_SINGLE) logs -f orchestrator
 
 # Pull base images (do once, speeds up builds)
 docker-pull:

@@ -3,6 +3,7 @@ Speech-to-Text module for Orchestrator
 
 Oparty na Faster-Whisper z VAD.
 Kompatybilny z wersją Jetson.
+Używa settings do autodetekcji GPU/CPU.
 """
 
 import asyncio
@@ -11,9 +12,11 @@ from typing import AsyncIterator, Optional
 import queue
 import numpy as np
 
+from ..settings import settings
+
 try:
     import sounddevice as sd
-except ImportError:
+except (ImportError, OSError):
     sd = None
 
 try:
@@ -28,26 +31,44 @@ except ImportError:
 
 
 class SpeechToText:
-    """Streaming STT z VAD."""
+    """Streaming STT z VAD i autodetekcją GPU/CPU."""
     
-    def __init__(self, stt_config: dict, audio_config: dict):
+    def __init__(self, stt_config: dict = None, audio_config: dict = None):
         self.logger = logging.getLogger("stt")
         
-        # Audio config
-        self.sample_rate = audio_config.get("sample_rate", 16000)
-        self.channels = audio_config.get("channels", 1)
+        # Use settings as defaults, allow config overrides
+        stt_config = stt_config or {}
+        audio_config = audio_config or {}
+        
+        # Audio config (from settings or config)
+        self.sample_rate = audio_config.get("sample_rate", settings.AUDIO_SAMPLE_RATE)
+        self.channels = audio_config.get("channels", settings.AUDIO_CHANNELS)
+        self.input_device = self._normalize_input_device(
+            audio_config.get("input_device", settings.AUDIO_INPUT_DEVICE)
+        )
         
         # VAD config
         vad_config = audio_config.get("vad", {})
-        self.vad_enabled = vad_config.get("enabled", True)
-        self.vad_mode = vad_config.get("mode", 3)
-        self.silence_duration = vad_config.get("silence_duration", 0.8)
+        self.vad_enabled = vad_config.get("enabled", settings.AUDIO_VAD_ENABLED)
+        self.vad_mode = vad_config.get("mode", settings.AUDIO_VAD_MODE)
+        self.silence_duration = vad_config.get("silence_duration", settings.AUDIO_VAD_SILENCE_DURATION)
+        self.max_buffer_seconds = vad_config.get("max_buffer_seconds", settings.AUDIO_VAD_MAX_BUFFER_SECONDS)
         
-        # STT config
-        self.model_name = stt_config.get("model", "small")
-        self.language = stt_config.get("language", "pl")
-        self.compute_type = stt_config.get("compute_type", "float16")
-        self.device = stt_config.get("device", "cuda")
+        # STT config with auto-detection
+        self.model_name = stt_config.get("model", settings.AUDIO_STT_MODEL)
+        self.language = stt_config.get("language", settings.AUDIO_STT_LANGUAGE)
+        
+        # Device auto-detection: "auto" -> check GPU availability
+        cfg_device = stt_config.get("device", settings.AUDIO_STT_DEVICE)
+        cfg_compute = stt_config.get("compute_type", settings.AUDIO_STT_COMPUTE_TYPE)
+        
+        if cfg_device == "auto":
+            self.device = settings.get_effective_device()
+            self.compute_type = settings.get_effective_compute_type()
+            self.logger.info(f"Auto-detected device: {self.device}, compute_type: {self.compute_type}")
+        else:
+            self.device = cfg_device
+            self.compute_type = cfg_compute if cfg_compute != "auto" else ("float16" if cfg_device == "cuda" else "float32")
         
         # Components
         self.model: Optional[WhisperModel] = None
@@ -62,6 +83,19 @@ class SpeechToText:
         # State
         self.is_speaking = False
         self.silence_frames = 0
+
+    def _normalize_input_device(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            v = value.strip()
+            if not v or v.lower() == "auto":
+                return None
+            try:
+                return int(v)
+            except ValueError:
+                return v
+        return value
     
     async def initialize(self):
         """Inicjalizacja modelu."""
@@ -71,17 +105,26 @@ class SpeechToText:
 
         if sd is None:
             self.logger.warning("sounddevice not installed, audio streaming disabled")
+
+        # Final safety check for CUDA - verify cuDNN before attempting
+        effective_device = self.device
+        effective_compute_type = self.compute_type
+
+        if effective_device == "cuda" and not settings.is_cudnn_available():
+            self.logger.warning("cuDNN not available, falling back to CPU")
+            effective_device = "cpu"
+            effective_compute_type = "float32"
         
-        self.logger.info(f"Loading Whisper model: {self.model_name}")
+        self.logger.info(f"Loading Whisper model: {self.model_name} (device={effective_device}, compute={effective_compute_type})")
         
         try:
             self.model = WhisperModel(
                 self.model_name,
-                device=self.device,
-                compute_type=self.compute_type
+                device=effective_device,
+                compute_type=effective_compute_type
             )
         except Exception as e:
-            self.logger.warning(f"GPU init failed, falling back to CPU: {e}")
+            self.logger.warning(f"Model init failed ({effective_device}), falling back to CPU: {e}")
             self.model = WhisperModel(
                 self.model_name,
                 device="cpu",
@@ -119,8 +162,9 @@ class SpeechToText:
             self._input_stream = sd.InputStream(
                 samplerate=self.sample_rate,
                 channels=self.channels,
-                dtype=np.int16,
+                dtype="int16",
                 blocksize=frame_size,
+                device=self.input_device,
                 callback=audio_callback
             )
             self._input_stream.start()
@@ -130,6 +174,7 @@ class SpeechToText:
         
         frames_per_second = self.sample_rate / frame_size
         silence_threshold = int(self.silence_duration * frames_per_second)
+        max_buffer_frames = int(max(self.max_buffer_seconds, 0.0) * frames_per_second)
         
         while self._running:
             try:
@@ -153,6 +198,12 @@ class SpeechToText:
                 self.silence_frames = 0
                 self.speech_buffer.append(audio_chunk)
                 self.is_speaking = True
+
+                if max_buffer_frames > 0 and len(self.speech_buffer) >= max_buffer_frames:
+                    transcript = await self._transcribe()
+                    if transcript:
+                        yield transcript
+                    self.speech_buffer.clear()
             else:
                 if self.is_speaking:
                     self.silence_frames += 1

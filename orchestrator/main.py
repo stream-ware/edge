@@ -141,7 +141,13 @@ class Orchestrator:
             path = [p.lower() for p in key[len(prefix):].split("__") if p]
             if not path:
                 continue
-            self._set_config_path(config, path, self._coerce_env_value(value))
+
+            if key.endswith("__INPUT_DEVICE") and not value.strip():
+                coerced_value = None
+            else:
+                coerced_value = self._coerce_env_value(value)
+
+            self._set_config_path(config, path, coerced_value)
 
     def _set_config_path(self, config: dict, path: list, value: Any) -> None:
         node: Any = config
@@ -383,7 +389,8 @@ class Orchestrator:
         self.logger.info(f"📋 DSL: {json.dumps(dsl, ensure_ascii=False)}")
         
         # 5. System commands
-        if dsl.get("action", "").startswith("system."):
+        action = dsl.get("action") or ""
+        if action.startswith("system."):
             result = await self._handle_system_command(dsl)
         else:
             # 6. Execute via adapter
@@ -418,7 +425,17 @@ class Orchestrator:
     
     async def _execute_dsl(self, dsl: dict) -> dict:
         """Wykonanie DSL przez odpowiedni adapter."""
-        action = dsl.get("action", "")
+        action = dsl.get("action") or ""
+
+        if not isinstance(action, str):
+            action = str(action)
+
+        if not action.strip():
+            return {
+                "action": None,
+                "status": "error",
+                "error": "Brak pola 'action' w DSL"
+            }
         
         # Wyciągnij kategorię z akcji (np. docker.restart -> docker)
         category = action.split(".")[0] if "." in action else action

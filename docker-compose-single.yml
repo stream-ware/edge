@@ -5,10 +5,9 @@ services:
   # MQTT Broker (lightweight, starts first)
   mqtt:
     image: eclipse-mosquitto:2
-    container_name: streamware-mqtt
     ports:
-      - "1883:1883"
-      - "9001:9001"
+      - "${MQTT_PORT_EXTERNAL:-1883}:1883"
+      - "${MOSQUITTO_WS_PORT:-9001}:9001"
     volumes:
       - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
       - mqtt_data:/mosquitto/data
@@ -29,16 +28,20 @@ services:
       dockerfile: Dockerfile
     image: streamware-orchestrator:latest
     pull_policy: never
-    container_name: streamware-orchestrator
+    env_file:
+      - .env
     environment:
-      - MQTT_BROKER=${MQTT_BROKER:-mqtt}
-      - MQTT_PORT=${MQTT_PORT:-1883}
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - STREAMWARE__MQTT__BROKER=${STREAMWARE__MQTT__BROKER:-mqtt}
+      - STREAMWARE__MQTT__PORT=${STREAMWARE__MQTT__PORT:-1883}
+      - STREAMWARE__LLM__BASE_URL=${STREAMWARE__LLM__BASE_URL:-http://host.docker.internal:11434}
       - STREAMWARE_MODE=${STREAMWARE_MODE:-docker}
       - STREAMWARE_ENV_FILE=/app/.env
+      - STREAMWARE__AUDIO__STT__DEVICE=${STREAMWARE__AUDIO__STT__DEVICE:-auto}
+      - STREAMWARE__AUDIO__STT__COMPUTE_TYPE=${STREAMWARE__AUDIO__STT__COMPUTE_TYPE:-auto}
     volumes:
       - ./config:/app/config:ro
       - ./models:/app/models:ro
+      - ./orchestrator:/app/orchestrator:ro
       - ./.env:/app/.env
       - /var/run/docker.sock:/var/run/docker.sock
     user: "0:0"
@@ -54,7 +57,8 @@ services:
   # Sample app for testing voice commands
   webapp:
     image: nginx:alpine
-    container_name: webapp
+    profiles:
+      - demo
     ports:
       - "${WEBAPP_PORT:-8081}:80"
     networks:
