@@ -1,0 +1,39 @@
+# Streamware Orchestrator - Requirements
+
+# Core
+pyyaml>=6.0
+numpy>=1.24.0
+
+# Audio - STT
+faster-whisper>=1.0.0
+sounddevice>=0.4.6
+soundfile>=0.12.1
+webrtcvad>=2.0.10
+
+# Audio - TTS
+piper-tts>=1.2.0
+
+# LLM
+httpx>=0.25.0
+ollama>=0.1.0
+
+# MQTT
+paho-mqtt>=2.0.0
+
+# Docker
+docker>=7.0.0
+
+# Vision / Camera
+opencv-python>=4.8.0
+ultralytics>=8.1.0
+
+# Database (optional)
+asyncpg>=0.29.0
+sqlalchemy>=2.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+
+# Development
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
