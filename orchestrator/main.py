@@ -8,6 +8,8 @@ LLM-powered orchestrator z:
 - Docker control
 - IoT/Sensor support
 - Text2DSL conversion
+
+Optimized for fast startup with lazy loading of heavy modules.
 """
 
 import asyncio
@@ -15,19 +17,23 @@ import logging
 import signal
 import sys
 import json
+import os
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 
 import yaml
 
-from text2dsl import Text2DSL
-from llm_engine import LLMEngine
-from audio.stt import SpeechToText
-from audio.tts import TextToSpeech
-from adapters.docker_adapter import DockerAdapter
-from adapters.mqtt_adapter import MQTTAdapter
-from adapters.firmware_adapter import FirmwareAdapter
-from vision.adapter import VisionAdapter
+from .text2dsl import Text2DSL
+from .llm_engine import LLMEngine
+
+# Lazy imports for heavy modules (loaded only when needed)
+if TYPE_CHECKING:
+    from .audio.stt import SpeechToText
+    from .audio.tts import TextToSpeech
+    from .adapters.docker_adapter import DockerAdapter
+    from .adapters.mqtt_adapter import MQTTAdapter
+    from .adapters.firmware_adapter import FirmwareAdapter
+    from .vision.adapter import VisionAdapter
 
 
 class Orchestrator:
@@ -89,30 +95,33 @@ class Orchestrator:
         }
     
     async def initialize(self):
-        """Inicjalizacja wszystkich komponentów."""
+        """Inicjalizacja komponentów (lazy loading dla szybkiego startu)."""
         self.logger.info("Inicjalizacja Orchestratora...")
         
-        # LLM
+        # LLM (lightweight, always needed)
         self.logger.info("  → LLM Engine...")
         self.llm = LLMEngine(self.config.get("llm", {}))
         await self.llm.initialize()
         
-        # Audio (opcjonalne)
+        # Audio - lazy import (heavy: whisper, piper)
         if self.config.get("audio", {}).get("enabled", True):
-            self.logger.info("  → Audio STT...")
+            self.logger.info("  → Audio STT (lazy loading)...")
+            from .audio.stt import SpeechToText
             self.stt = SpeechToText(
                 self.config.get("audio", {}).get("stt", {}),
                 self.config.get("audio", {})
             )
             await self.stt.initialize()
             
-            self.logger.info("  → Audio TTS...")
+            self.logger.info("  → Audio TTS (lazy loading)...")
+            from .audio.tts import TextToSpeech
             self.tts = TextToSpeech(self.config.get("audio", {}).get("tts", {}))
             await self.tts.initialize()
         
-        # MQTT (opcjonalne)
+        # MQTT - lazy import
         if self.config.get("mqtt", {}).get("enabled", True):
             self.logger.info("  → MQTT Adapter...")
+            from .adapters.mqtt_adapter import MQTTAdapter
             self.mqtt = MQTTAdapter(self.config.get("mqtt", {}))
             await self.mqtt.connect()
             
@@ -120,28 +129,31 @@ class Orchestrator:
             await self.mqtt.subscribe("commands/#", self._on_mqtt_command)
             await self.mqtt.subscribe("audio/tts", self._on_mqtt_tts)
         
-        # Adaptery
+        # Adaptery - lazy load
         await self._init_adapters()
         
         self.logger.info("✅ Orchestrator zainicjalizowany")
     
     async def _init_adapters(self):
-        """Inicjalizacja adapterów."""
+        """Inicjalizacja adapterów (lazy loading)."""
         enabled = self.config.get("adapters", {}).get("enabled", [])
         
         if "docker" in enabled:
-            self.logger.info("  → Docker Adapter...")
+            self.logger.info("  → Docker Adapter (lazy loading)...")
+            from .adapters.docker_adapter import DockerAdapter
             self.adapters["docker"] = DockerAdapter()
             await self.adapters["docker"].initialize()
         
         if "firmware" in enabled:
             self.logger.info("  → Firmware Adapter...")
+            from .adapters.firmware_adapter import FirmwareAdapter
             self.adapters["firmware"] = FirmwareAdapter(
                 self.config.get("firmware", {})
             )
         
         if "vision" in enabled:
-            self.logger.info("  → Vision Adapter...")
+            self.logger.info("  → Vision Adapter (lazy loading - YOLO)...")
+            from .vision.adapter import VisionAdapter
             self.adapters["vision"] = VisionAdapter(
                 self.config.get("vision", {})
             )

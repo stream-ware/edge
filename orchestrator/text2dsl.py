@@ -204,10 +204,12 @@ class Text2DSL:
             return self._cache[text_lower]
         
         # Próbuj pattern matching
+        # Kolejność ma znaczenie: komendy IoT/urządzeń (np. "włącz światło")
+        # nie mogą zostać błędnie zinterpretowane jako docker.start.
         all_patterns = (
-            self.docker_patterns + 
-            self.sensor_patterns + 
-            self.sql_patterns + 
+            self.sensor_patterns +
+            self.docker_patterns +
+            self.sql_patterns +
             self.vision_patterns +
             self.system_patterns
         )

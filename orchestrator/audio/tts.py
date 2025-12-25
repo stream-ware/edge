@@ -46,9 +46,8 @@ class TextToSpeech:
     
     async def initialize(self):
         """Inicjalizacja TTS."""
-        if sd is None:
-            self.logger.warning("sounddevice not installed, TTS disabled")
-            return
+        if sd is None or sf is None:
+            self.logger.warning("sounddevice/soundfile not installed, audio playback disabled")
         
         model_file = Path(self.model_path)
         

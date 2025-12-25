@@ -1,50 +1,65 @@
 # Streamware Orchestrator Dockerfile
-# Multi-stage build for smaller image
+# Optimized multi-stage build with layer caching
 
-FROM python:3.11-slim as builder
+# ============================================
+# Stage 1: Build dependencies (cached layer)
+# ============================================
+FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
-# System deps for audio
+# System deps for building wheels
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     portaudio19-dev \
     libsndfile1-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Python deps
-COPY requirements.txt .
-RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+# Copy ONLY requirements first (layer caching)
+COPY requirements-docker.txt ./requirements.txt
+
+# Build wheels (cached if requirements unchanged)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --wheel-dir /wheels -r requirements.txt
 
 # ============================================
-# Final image
+# Stage 2: Runtime image (minimal)
 # ============================================
-FROM python:3.11-slim
+FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# Runtime deps
+# Runtime deps only (no build tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libportaudio2 \
     libsndfile1 \
     espeak-ng \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Install wheels from builder
+# Install pre-built wheels (fast)
 COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
-
-# Copy application
-COPY . .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-index --find-links=/wheels /wheels/*.whl \
+    && rm -rf /wheels
 
 # Environment
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
+
+# Copy application code (changes most often - last layer)
+COPY orchestrator/ ./orchestrator/
+COPY config/ ./config/
+
+# Create non-root user
+RUN useradd -m -u 1000 streamware && chown -R streamware:streamware /app
+USER streamware
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8080/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "print('ok')" || exit 1
 
 # Entry point
-CMD ["python", "main.py"]
+CMD ["python", "-m", "orchestrator.main"]

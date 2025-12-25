@@ -1,58 +1,60 @@
 # Docker Compose - Full Edge + Backend Deployment
-# For production with IoT/Edge devices
-
-version: "3.8"
+# Optimized for production with fast restarts
 
 services:
   # ============================================
   # CORE INFRASTRUCTURE
   # ============================================
   
-  # MQTT Broker (central)
+  # MQTT Broker (central) - starts first, lightweight
   mqtt:
     image: eclipse-mosquitto:2
     container_name: mqtt
     ports:
       - "1883:1883"
-      - "8883:8883"  # TLS
+      - "8883:8883"
     volumes:
       - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mqtt_data:/mosquitto/data
-      - mqtt_logs:/mosquitto/log
     networks:
       - streamware
     restart: always
     healthcheck:
-      test: ["CMD", "mosquitto_sub", "-t", "$$", "-C", "1", "-i", "healthcheck"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      interval: 10s
+      timeout: 5s
       retries: 3
+      start_period: 3s
 
   # ============================================
   # AI / ORCHESTRATION
   # ============================================
   
-  # Main Orchestrator
+  # Main Orchestrator (optimized build)
   orchestrator:
-    build: ./orchestrator
+    build:
+      context: .
+      dockerfile: Dockerfile
+      cache_from:
+        - streamware-orchestrator:latest
+    image: streamware-orchestrator:latest
     container_name: orchestrator
     environment:
       - MQTT_BROKER=mqtt
       - MQTT_PORT=1883
-      - OLLAMA_HOST=http://localhost:11434
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - DB_HOST=db
       - DB_PORT=5432
       - DB_USER=streamware
       - DB_PASSWORD=${DB_PASSWORD:-streamware123}
+      - STREAMWARE_MODE=docker
     volumes:
       - ./config:/app/config:ro
       - ./models:/app/models:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       mqtt:
         condition: service_healthy
-#      ollama:
-#        condition: service_started
     networks:
       - streamware
     restart: always

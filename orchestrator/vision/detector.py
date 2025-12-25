@@ -105,7 +105,7 @@ class ObjectDetector:
         
         # Components
         self.model: Optional[YOLO] = None
-        self.camera_manager = CameraManager(self.config.get("cameras", {}))
+        self.camera_manager = CameraManager(self.config)
         
         # State
         self._running = False

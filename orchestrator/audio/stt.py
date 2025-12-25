@@ -68,10 +68,9 @@ class SpeechToText:
         if WhisperModel is None:
             self.logger.warning("faster-whisper not installed, STT disabled")
             return
-        
+
         if sd is None:
-            self.logger.warning("sounddevice not installed, STT disabled")
-            return
+            self.logger.warning("sounddevice not installed, audio streaming disabled")
         
         self.logger.info(f"Loading Whisper model: {self.model_name}")
         

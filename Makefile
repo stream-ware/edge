@@ -79,44 +79,66 @@ run-docker:
 	@. venv/bin/activate && python -m orchestrator.main config/config.yaml
 
 # ============================================
-# DOCKER
+# DOCKER (Optimized for fast builds/restarts)
 # ============================================
 
-docker-dev:
-	docker-compose -f docker-compose-single.yml up --build
+# Build with BuildKit cache (fast rebuilds)
+docker-build:
+	DOCKER_BUILDKIT=1 docker build \
+		--cache-from streamware-orchestrator:latest \
+		-t streamware-orchestrator:latest .
 
+# Development (with build cache)
+docker-dev:
+	DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
+		docker-compose -f docker-compose-single.yml up --build
+
+# Development (no rebuild - fastest restart)
+docker-up:
+	docker-compose -f docker-compose-single.yml up
+
+# Production (detached, cached build)
 docker-prod:
-	docker-compose -f docker-compose-full.yml up -d --build
+	DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
+		docker-compose -f docker-compose-full.yml up -d --build
+
+# Production restart (no rebuild)
+docker-restart:
+	docker-compose -f docker-compose-full.yml restart orchestrator
 
 docker-multi:
-	docker-compose -f docker-compose-multi.yml up --build
+	DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
+		docker-compose -f docker-compose-multi.yml up --build
 
 docker-stop:
-	docker-compose -f docker-compose-single.yml down
-	docker-compose -f docker-compose-full.yml down
-	docker-compose -f docker-compose-multi.yml down
+	docker-compose -f docker-compose-single.yml down 2>/dev/null || true
+	docker-compose -f docker-compose-full.yml down 2>/dev/null || true
+	docker-compose -f docker-compose-multi.yml down 2>/dev/null || true
 
 docker-logs:
-	docker-compose -f docker-compose-single.yml logs -f
+	docker-compose -f docker-compose-single.yml logs -f orchestrator
 
-docker-build:
-	docker build -t streamware-orchestrator .
+# Pull base images (do once, speeds up builds)
+docker-pull:
+	docker pull python:3.11-slim
+	docker pull eclipse-mosquitto:2
+	docker pull nginx:alpine
 
 # ============================================
 # TESTING
 # ============================================
 
 test:
-	@. venv/bin/activate && pytest tests/ -v
+	PYTHONPATH=. python3 -m pytest tests/ -v
 
 test-cov:
-	@. venv/bin/activate && pytest tests/ -v --cov=orchestrator --cov-report=html --cov-report=term
+	PYTHONPATH=. python3 -m pytest tests/ -v --cov=orchestrator --cov-report=html --cov-report=term
 
 test-unit:
-	@. venv/bin/activate && pytest tests/ -v -m "not integration"
+	PYTHONPATH=. python3 -m pytest tests/ -v -m "not integration"
 
 test-integration:
-	@. venv/bin/activate && pytest tests/ -v -m "integration"
+	PYTHONPATH=. python3 -m pytest tests/ -v -m "integration"
 
 # ============================================
 # UTILITIES

@@ -1,10 +1,8 @@
 # Docker Compose - Single Container Deployment
-# For development and testing
-
-version: "3.8"
+# Optimized for fast startup and development
 
 services:
-  # MQTT Broker
+  # MQTT Broker (lightweight, starts first)
   mqtt:
     image: eclipse-mosquitto:2
     container_name: streamware-mqtt
@@ -16,28 +14,40 @@ services:
       - mqtt_data:/mosquitto/data
     networks:
       - streamware
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "healthcheck", "-W", "3"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
-  # Orchestrator
+  # Orchestrator (main service)
   orchestrator:
-    build: ./orchestrator
+    build:
+      context: .
+      dockerfile: Dockerfile
+      cache_from:
+        - streamware-orchestrator:latest
+    image: streamware-orchestrator:latest
     container_name: streamware-orchestrator
     environment:
       - MQTT_BROKER=mqtt
       - MQTT_PORT=1883
       - OLLAMA_HOST=http://host.docker.internal:11434
+      - STREAMWARE_MODE=docker
     volumes:
       - ./config:/app/config:ro
       - ./models:/app/models:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
-      - mqtt
+      mqtt:
+        condition: service_healthy
     networks:
       - streamware
-    # Dla audio (opcjonalne - w kontenerze trudne)
-    # devices:
-    #   - /dev/snd:/dev/snd
+    restart: unless-stopped
 
-  # Sample app do testów
+  # Sample app for testing voice commands
   webapp:
     image: nginx:alpine
     container_name: webapp
@@ -45,6 +55,7 @@ services:
       - "8080:80"
     networks:
       - streamware
+    restart: unless-stopped
 
 networks:
   streamware:
