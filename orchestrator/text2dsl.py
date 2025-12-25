@@ -531,6 +531,10 @@ class Text2DSL:
                 return output
             return "Wykonano."
         
+        # Conversation responses
+        elif action and action.startswith("conversation."):
+            return dsl.get("response", "Słucham?")
+        
         # Generic
         if status == "ok":
             return "Akcja wykonana pomyślnie."

@@ -28,6 +28,7 @@ import yaml
 
 from .text2dsl import Text2DSL
 from .llm_engine import LLMEngine
+from .intent import IntentClassifier, Intent, Domain
 
 # Lazy imports for heavy modules (loaded only when needed)
 if TYPE_CHECKING:
@@ -60,6 +61,7 @@ class Orchestrator:
         
         # Komponenty
         self.text2dsl = Text2DSL(self.config.get("text2dsl", {}))
+        self.intent_classifier: Optional[IntentClassifier] = None
         self.llm: Optional[LLMEngine] = None
         self.stt: Optional[SpeechToText] = None
         self.tts: Optional[TextToSpeech] = None
@@ -203,6 +205,13 @@ class Orchestrator:
         self.logger.info("  → LLM Engine...")
         self.llm = LLMEngine(self.config.get("llm", {}))
         await self.llm.initialize()
+        
+        # Intent Classifier (uses LLM)
+        self.logger.info("  → Intent Classifier...")
+        self.intent_classifier = IntentClassifier(
+            llm_engine=self.llm,
+            config=self.config.get("intent", {})
+        )
         
         # Audio - lazy import (heavy: whisper, piper)
         if self.config.get("audio", {}).get("enabled", True):
@@ -437,45 +446,90 @@ class Orchestrator:
         Returns:
             Odpowiedź w języku naturalnym
         """
-        # 1. Text2DSL - pattern matching
-        dsl = self.text2dsl.nl_to_dsl(text)
+        self._last_command = text
         
-        # 2. LLM fallback jeśli nie rozpoznano
-        if not dsl and self.llm:
-            self.logger.info("Pattern not matched, using LLM...")
+        # 1. Intent Classification (dynamiczne NLP/LLM)
+        intent = None
+        dsl = None
+        
+        if self.intent_classifier:
+            intent = await self.intent_classifier.classify(text)
+            self.logger.debug(f"Intent: {intent.domain.value}.{intent.action} (conf={intent.confidence:.2f}, src={intent.source})")
             
+            # Jeśli wymaga wyjaśnienia
+            if intent.requires_clarification:
+                response = intent.clarification_prompt or "Nie rozumiem. Powiedz inaczej lub 'pomoc'."
+                await self._output_response(response, source)
+                return response
+            
+            # Konwertuj Intent na DSL
+            dsl = self.intent_classifier.to_dsl(intent)
+        
+        # 2. Fallback do text2dsl (pattern matching) jeśli brak intent lub niski confidence
+        if not dsl or dsl.get("_confidence", 1.0) < 0.4:
+            pattern_dsl = self.text2dsl.nl_to_dsl(text)
+            if pattern_dsl:
+                dsl = pattern_dsl
+                self.logger.debug(f"Pattern fallback: {dsl.get('action')}")
+        
+        # 3. LLM fallback dla text2dsl jeśli nadal brak
+        if not dsl and self.llm:
+            self.logger.info("Using LLM DSL fallback...")
             prompt = self.text2dsl.get_llm_prompt(text)
             llm_response = await self.llm.generate(prompt)
-            
             if llm_response:
                 dsl = self.text2dsl.parse_llm_response(llm_response)
         
-        # 3. Jeśli nadal nie ma DSL
+        # 4. Jeśli nadal nie ma DSL
         if not dsl:
             response = "Nie rozumiem tej komendy. Powiedz 'pomoc' aby zobaczyć dostępne opcje."
             await self._output_response(response, source)
             return response
         
-        # 4. Dodaj target_hint jeśli brak target w DSL
+        # 5. Dodaj target_hint jeśli brak target w DSL
         if target_hint and not dsl.get("target"):
             dsl["target"] = target_hint
         
         self.logger.info(f"📋 DSL: {json.dumps(dsl, ensure_ascii=False)}")
         
-        # 5. System commands
+        # 6. Route to appropriate handler
         action = dsl.get("action") or ""
-        if action.startswith("system."):
+        
+        if action == "system.clarify":
+            response = dsl.get("prompt", "Nie rozumiem.")
+            await self._output_response(response, source)
+            return response
+        elif action.startswith("system."):
             result = await self._handle_system_command(dsl)
+        elif action.startswith("diag.") or action == "shell.run":
+            result = await self._handle_diagnostic(dsl)
+        elif action.startswith("conversation."):
+            result = await self._handle_conversation(dsl)
         else:
-            # 6. Execute via adapter
+            # Execute via adapter
             result = await self._execute_dsl(dsl)
+        
+        # Track errors for diagnostic analysis
+        if result.get("status") == "error":
+            self._last_error = {
+                "command": text,
+                "dsl": dsl,
+                "result": result,
+                "time": time.time()
+            }
+            if self.intent_classifier:
+                self.intent_classifier.set_error_context(self._last_error)
         
         # 7. Convert result to NL
         response = self.text2dsl.dsl_to_nl(result)
         
         self.logger.info(f"💬 Response: {response}")
         
-        # 8. Output
+        # 8. Update conversation context
+        if self.intent_classifier and intent:
+            self.intent_classifier.update_context(text, intent, response)
+        
+        # 9. Output
         await self._output_response(response, source, dsl)
         
         return response
@@ -519,6 +573,114 @@ class Orchestrator:
             return {"action": action, "status": "ok"}
         
         return {"action": action, "status": "unknown"}
+    
+    async def _handle_conversation(self, dsl: dict) -> dict:
+        """Obsługa intencji konwersacyjnych (powitania, podziękowania, etc.)."""
+        action = dsl.get("action", "")
+        
+        responses = {
+            "conversation.greeting": "Cześć! Jak mogę pomóc?",
+            "conversation.thanks": "Nie ma za co!",
+            "conversation.confirm": "OK, rozumiem.",
+            "conversation.deny": "Rozumiem, anuluję.",
+            "conversation.unclear": "Nie rozumiem. Powiedz 'pomoc' aby zobaczyć opcje.",
+        }
+        
+        response_text = responses.get(action, "Słucham?")
+        return {"action": action, "status": "ok", "response": response_text}
+    
+    async def _handle_diagnostic(self, dsl: dict) -> dict:
+        """Obsługa komend diagnostycznych z workflow: informacja → analiza → rozwiązanie."""
+        action = dsl.get("action", "")
+        shell = self.adapters.get("shell")
+        
+        if action == "shell.run":
+            command = dsl.get("command", "")
+            if not command:
+                return {"action": action, "status": "error", "error": "Brak komendy"}
+            if shell:
+                result = await shell.execute(command)
+                result["action"] = action
+                return result
+            return {"action": action, "status": "error", "error": "Shell adapter niedostępny"}
+        
+        elif action == "diag.check":
+            topic = dsl.get("topic", "system")
+            if shell:
+                diag_result = await shell.diagnose(topic)
+                summary_parts = []
+                for d in diag_result.get("diagnostics", []):
+                    if d.get("status") == "ok" and d.get("stdout"):
+                        summary_parts.append(d["stdout"][:200])
+                    elif d.get("status") == "error":
+                        summary_parts.append(f"❌ {d.get('command', '')}: {d.get('stderr', d.get('error', ''))[:100]}")
+                
+                summary = "\n".join(summary_parts[:8]) if summary_parts else f"Brak danych dla {topic}"
+                
+                if self.llm:
+                    analysis_prompt = f"""Przeanalizuj wyniki diagnostyki '{topic}' i podaj krótkie podsumowanie (1-2 zdania) co działa, a co nie:
+
+{summary}
+
+Odpowiedz po polsku, krótko i konkretnie."""
+                    llm_summary = await self.llm.generate(analysis_prompt)
+                    if llm_summary:
+                        summary = llm_summary.strip()
+                
+                return {"action": action, "status": "ok", "topic": topic, "summary": summary}
+            return {"action": action, "status": "error", "error": "Shell adapter niedostępny"}
+        
+        elif action == "diag.analyze":
+            if not self._last_error:
+                return {"action": action, "status": "ok", "analysis": "Nie było ostatniego błędu do analizy."}
+            
+            error_info = self._last_error
+            error_msg = error_info.get("result", {}).get("error", "nieznany błąd")
+            command = error_info.get("command", "")
+            dsl_info = error_info.get("dsl", {})
+            
+            context_parts = [f"Komenda: {command}", f"Błąd: {error_msg}"]
+            
+            if shell:
+                action_type = dsl_info.get("action", "").split(".")[0]
+                topic_map = {"sensor": "sensors", "docker": "docker", "mqtt": "mqtt", "env": "system"}
+                topic = topic_map.get(action_type, "system")
+                diag_result = await shell.diagnose(topic)
+                for d in diag_result.get("diagnostics", [])[:3]:
+                    if d.get("stdout"):
+                        context_parts.append(d["stdout"][:150])
+            
+            if self.llm:
+                analysis_prompt = f"""Użytkownik wykonał komendę która się nie powiodła. Przeanalizuj problem i zaproponuj rozwiązanie.
+
+{chr(10).join(context_parts)}
+
+Odpowiedz po polsku:
+1. Krótka analiza przyczyny (1 zdanie)
+2. Konkretne rozwiązanie (1-2 zdania)"""
+                
+                llm_response = await self.llm.generate(analysis_prompt)
+                if llm_response:
+                    return {"action": action, "status": "ok", "analysis": llm_response.strip()}
+            
+            return {"action": action, "status": "ok", "analysis": f"Ostatni błąd: {error_msg}. Sprawdź konfigurację lub połączenie."}
+        
+        elif action == "diag.fix":
+            problem = dsl.get("problem", "")
+            
+            if self.llm:
+                fix_prompt = f"""Użytkownik chce naprawić problem: "{problem}"
+
+Zaproponuj konkretne kroki naprawy (max 3 kroki). Jeśli to wymaga komendy shell, podaj ją.
+Odpowiedz po polsku, krótko i konkretnie."""
+                
+                llm_response = await self.llm.generate(fix_prompt)
+                if llm_response:
+                    return {"action": action, "status": "ok", "result": llm_response.strip()}
+            
+            return {"action": action, "status": "ok", "result": f"Nie mogę automatycznie naprawić: {problem}. Spróbuj 'zdiagnozuj system'."}
+        
+        return {"action": action, "status": "error", "error": f"Nieznana akcja diagnostyczna: {action}"}
     
     async def _execute_dsl(self, dsl: dict) -> dict:
         """Wykonanie DSL przez odpowiedni adapter."""
