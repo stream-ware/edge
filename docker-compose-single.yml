@@ -1,0 +1,54 @@
+# Docker Compose - Single Container Deployment
+# For development and testing
+
+version: "3.8"
+
+services:
+  # MQTT Broker
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: streamware-mqtt
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt_data:/mosquitto/data
+    networks:
+      - streamware
+
+  # Orchestrator
+  orchestrator:
+    build: ./orchestrator
+    container_name: streamware-orchestrator
+    environment:
+      - MQTT_BROKER=mqtt
+      - MQTT_PORT=1883
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    volumes:
+      - ./config:/app/config:ro
+      - ./models:/app/models:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - mqtt
+    networks:
+      - streamware
+    # Dla audio (opcjonalne - w kontenerze trudne)
+    # devices:
+    #   - /dev/snd:/dev/snd
+
+  # Sample app do testów
+  webapp:
+    image: nginx:alpine
+    container_name: webapp
+    ports:
+      - "8080:80"
+    networks:
+      - streamware
+
+networks:
+  streamware:
+    driver: bridge
+
+volumes:
+  mqtt_data:

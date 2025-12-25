@@ -1,0 +1,41 @@
+# Streamware Jetson - Requirements
+# Tested on Jetson Orin Nano 8GB + JetPack 6.0
+
+# Core
+numpy>=1.24.0
+pyyaml>=6.0
+
+# Audio
+sounddevice>=0.4.6
+soundfile>=0.12.1
+pyaudio>=0.2.14
+webrtcvad>=2.0.10
+
+# STT - Faster Whisper
+faster-whisper>=1.0.0
+ctranslate2>=4.0.0
+
+# Vision
+opencv-python>=4.8.0
+ultralytics>=8.1.0
+
+# LLM
+ollama>=0.1.0
+httpx>=0.25.0
+
+# TTS - Piper
+piper-tts>=1.2.0
+
+# Async & Utils
+asyncio-throttle>=1.0.2
+aiofiles>=23.0.0
+
+# Optional: WebSocket API
+websockets>=12.0
+
+# Optional: Home Assistant
+aiohttp>=3.9.0
+
+# Development
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

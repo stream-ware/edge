@@ -1,0 +1,108 @@
+# Docker Compose - Multi-Service Deployment
+# For staging environment
+
+version: "3.8"
+
+services:
+  # MQTT Broker
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: mqtt
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks:
+      - streamware
+    restart: unless-stopped
+
+  # Orchestrator
+  orchestrator:
+    build: ./orchestrator
+    container_name: orchestrator
+    environment:
+      - MQTT_BROKER=mqtt
+      - MQTT_PORT=1883
+      - OLLAMA_HOST=http://ollama:11434
+      - DB_HOST=db
+      - DB_PORT=5432
+    volumes:
+      - ./config:/app/config:ro
+      - ./models:/app/models:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - mqtt
+      - ollama
+    networks:
+      - streamware
+    restart: unless-stopped
+
+  # Ollama LLM
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - streamware
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: db
+    environment:
+      POSTGRES_USER: streamware
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-streamware123}
+      POSTGRES_DB: streamware
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - streamware
+    restart: unless-stopped
+
+  # Backend API
+  backend:
+    image: nginx:alpine  # Replace with your backend
+    container_name: backend
+    environment:
+      - DB_HOST=db
+      - MQTT_BROKER=mqtt
+    depends_on:
+      - db
+      - mqtt
+    networks:
+      - streamware
+    restart: unless-stopped
+
+  # Frontend
+  frontend:
+    image: nginx:alpine
+    container_name: frontend
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    depends_on:
+      - backend
+    networks:
+      - streamware
+    restart: unless-stopped
+
+networks:
+  streamware:
+    driver: bridge
+
+volumes:
+  mqtt_data:
+  db_data:
+  ollama_data:
