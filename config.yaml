@@ -1,0 +1,210 @@
+# Streamware Jetson Configuration
+# Optymalizacja dla Jetson Orin Nano 8GB
+
+# ============================================
+# AUDIO SETTINGS
+# ============================================
+audio:
+  # Parametry nagrywania
+  sample_rate: 16000
+  channels: 1
+  chunk_size: 1024
+  format: "int16"
+  
+  # Voice Activity Detection
+  vad:
+    enabled: true
+    mode: 3  # 0-3, wyższy = bardziej agresywny
+    threshold: 0.6
+    min_speech_duration: 0.5  # sekundy
+    silence_duration: 0.8  # sekundy ciszy = koniec mówienia
+  
+  # Urządzenie (auto lub numer)
+  input_device: "auto"
+  output_device: "auto"
+
+# ============================================
+# SPEECH-TO-TEXT (Faster-Whisper)
+# ============================================
+stt:
+  model: "small"  # tiny, base, small, medium
+  language: "pl"  # pl, en, auto
+  beam_size: 5
+  compute_type: "float16"  # float16 dla GPU, int8 dla CPU
+  device: "cuda"
+  
+  # Streaming
+  chunk_length: 30  # sekundy
+  
+  # Optymalizacje
+  vad_filter: true
+  word_timestamps: false
+  condition_on_previous_text: true
+
+# ============================================
+# VISION (YOLOv8)
+# ============================================
+vision:
+  model: "yolov8n"  # yolov8n, yolov8s
+  model_path: "models/yolo/yolov8n.engine"  # TensorRT engine
+  
+  # Parametry detekcji
+  confidence: 0.5
+  iou_threshold: 0.45
+  max_detections: 20
+  
+  # Przetwarzanie
+  process_every_n_frames: 5  # Co 5 klatka
+  resolution: [640, 480]
+  fps: 30
+  
+  # Kamera
+  camera_source: 0  # 0 = USB, "csi://0" = CSI
+  use_gstreamer: true
+  
+  # Klasy do wykrywania (COCO)
+  # null = wszystkie
+  classes: null
+  
+  # Tłumaczenie klas na polski
+  translate_labels: true
+  
+  # Tracking (opcjonalne)
+  tracking:
+    enabled: false
+    tracker: "bytetrack"
+
+# ============================================
+# LLM (Ollama)
+# ============================================
+llm:
+  provider: "ollama"
+  model: "phi3:mini"  # phi3:mini, llama3.2:1b, gemma2:2b
+  
+  # Endpoint
+  base_url: "http://localhost:11434"
+  
+  # Generowanie
+  temperature: 0.7
+  max_tokens: 256
+  top_p: 0.9
+  
+  # System prompt
+  system_prompt: |
+    Jesteś pomocnym asystentem wizyjno-głosowym działającym na urządzeniu Jetson.
+    
+    ZASADY:
+    - Odpowiadaj KRÓTKO i KONKRETNIE po polsku
+    - Masz dostęp do informacji o obiektach widzianych przez kamerę
+    - Informacje o obiektach otrzymujesz w formacie: [obiekt: pozycja, pewność%]
+    - Jeśli nie widzisz obiektu, którego szuka użytkownik, powiedz wprost
+    - Nie wymyślaj obiektów których nie ma w danych
+    - Pozycje: lewo/środek/prawo, góra/środek/dół kadru
+    
+    PRZYKŁADY:
+    Użytkownik: "Co widzisz?"
+    Dane: [kubek: środek-lewo, 92%], [klawiatura: dół-środek, 87%]
+    Odpowiedź: "Widzę kubek po lewej stronie i klawiaturę na dole kadru."
+    
+    Użytkownik: "Gdzie jest mój telefon?"
+    Dane: [kubek: środek, 90%]
+    Odpowiedź: "Nie widzę telefonu w kadrze. Widzę tylko kubek."
+  
+  # Timeout
+  timeout: 30.0
+
+# ============================================
+# TEXT-TO-SPEECH (Piper)
+# ============================================
+tts:
+  model: "pl_PL-gosia-medium"
+  model_path: "models/piper/pl_PL-gosia-medium.onnx"
+  config_path: "models/piper/pl_PL-gosia-medium.onnx.json"
+  
+  # Parametry głosu
+  speaker_id: 0
+  length_scale: 1.0  # 1.0 = normalna prędkość
+  noise_scale: 0.667
+  noise_w: 0.8
+  
+  # Audio output
+  sample_rate: 22050
+
+# ============================================
+# ORCHESTRATOR
+# ============================================
+orchestrator:
+  # Tryb działania
+  mode: "continuous"  # continuous, push_to_talk, wake_word
+  
+  # Wake word (jeśli mode=wake_word)
+  wake_word: "hej asystent"
+  
+  # Timeouty
+  idle_timeout: 300  # sekundy bezczynności = standby
+  
+  # Bufor (opcjonalny - dla trybu z nagrywaniem)
+  buffer:
+    enabled: false
+    audio_seconds: 30
+    video_frames: 150  # 5s @ 30fps
+
+# ============================================
+# API (opcjonalne)
+# ============================================
+api:
+  enabled: false
+  
+  # WebSocket
+  websocket:
+    enabled: false
+    host: "0.0.0.0"
+    port: 8765
+  
+  # REST
+  rest:
+    enabled: false
+    host: "0.0.0.0"
+    port: 8080
+
+# ============================================
+# HOME ASSISTANT (opcjonalne)
+# ============================================
+homeassistant:
+  enabled: false
+  url: "http://homeassistant.local:8123"
+  token: "${HA_TOKEN}"  # z env
+  
+  # Encje do kontroli
+  entities: []
+
+# ============================================
+# LOGGING
+# ============================================
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/streamware.log"
+  max_size: "10MB"
+  backup_count: 3
+  
+  # Komponenty
+  components:
+    stt: "INFO"
+    vision: "INFO"
+    llm: "INFO"
+    tts: "INFO"
+    orchestrator: "DEBUG"
+
+# ============================================
+# PERFORMANCE
+# ============================================
+performance:
+  # GPU memory fraction (dla współdzielenia z innymi procesami)
+  gpu_memory_fraction: 0.8
+  
+  # Priorytety CPU
+  use_realtime_priority: false
+  
+  # Jetson power mode
+  # 0=MAXN, 1=15W, 2=7W
+  power_mode: 0
