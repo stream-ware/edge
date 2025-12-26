@@ -154,6 +154,7 @@ class TextToSpeech:
     
     def _play(self, audio: np.ndarray, samplerate: Optional[int] = None, playback_event: Optional[threading.Event] = None):
         """Odtwarzanie audio."""
+        stream = None
         try:
             if sd is None:
                 return

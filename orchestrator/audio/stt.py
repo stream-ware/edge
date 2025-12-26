@@ -271,19 +271,18 @@ class SpeechToText:
             return None
         
         loop = asyncio.get_event_loop()
-        
+
         try:
-            segments, _ = await loop.run_in_executor(
-                self._executor,
-                lambda: self.model.transcribe(
+            def _do_transcribe() -> str:
+                segments, _ = self.model.transcribe(
                     audio_float,
                     language=self.language if self.language != "auto" else None,
                     beam_size=self.beam_size,
-                    vad_filter=self.whisper_vad_filter
+                    vad_filter=self.whisper_vad_filter,
                 )
-            )
-            
-            text = " ".join(s.text.strip() for s in segments).strip()
+                return " ".join(s.text.strip() for s in segments).strip()
+
+            text = await loop.run_in_executor(self._executor, _do_transcribe)
             return text if text else None
             
         except Exception as e:
