@@ -224,21 +224,29 @@ class Orchestrator:
         self.proactive_analyzer = ProactiveAnalyzer(self.log_collector, self.llm)
         
         # Audio - lazy import (heavy: whisper, piper)
-        if self.config.get("audio", {}).get("enabled", True):
+        audio_cfg = (self.config.get("audio", {}) or {})
+        stt_cfg = (audio_cfg.get("stt", {}) or {})
+        tts_cfg = (audio_cfg.get("tts", {}) or {})
+        audio_enabled = bool(audio_cfg.get("enabled", True))
+        stt_enabled = bool(stt_cfg.get("enabled", True))
+        tts_enabled = bool(tts_cfg.get("enabled", True))
+
+        if audio_enabled and stt_enabled:
             self.logger.info("  → Audio STT (lazy loading)...")
             from .audio.stt import SpeechToText
 
             on_speech_start = self._on_speech_start if (self._barge_in_enabled and self._barge_in_trigger == "vad") else None
             self.stt = SpeechToText(
-                self.config.get("audio", {}).get("stt", {}),
-                self.config.get("audio", {}),
+                stt_cfg,
+                audio_cfg,
                 on_speech_start=on_speech_start
             )
             await self.stt.initialize()
-            
+
+        if audio_enabled and tts_enabled:
             self.logger.info("  → Audio TTS (lazy loading)...")
             from .audio.tts import TextToSpeech
-            self.tts = TextToSpeech(self.config.get("audio", {}).get("tts", {}))
+            self.tts = TextToSpeech(tts_cfg)
             await self.tts.initialize()
         
         # MQTT - lazy import
