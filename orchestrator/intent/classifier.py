@@ -147,7 +147,7 @@ class IntentClassifier:
             "examples": ["wykonaj komendę docker ps", "uruchom ping localhost"]
         },
         "conversation": {
-            "actions": ["greeting", "thanks", "confirm", "deny", "unclear"],
+            "actions": ["greeting", "thanks", "goodbye", "confirm", "deny", "unclear"],
             "entities": [],
             "examples": ["cześć", "dzięki", "tak", "nie", "co?"]
         }
@@ -158,8 +158,9 @@ class IntentClassifier:
         (r"^(koniec|exit|wyjdź|quit)\s*[?!.]?$", Domain.SYSTEM, "exit", {}),
         (r"^(cicho|mute|wycisz)\s*[?!.]?$", Domain.SYSTEM, "mute", {}),
         (r"^(odcisz|unmute)\s*[?!.]?$", Domain.SYSTEM, "unmute", {}),
-        (r"^(cześć|hej|witaj|hello|hi)\s*[?!.]?$", Domain.CONVERSATION, "greeting", {}),
-        (r"^(dzięki|dziękuję|thanks)\s*[?!.]?$", Domain.CONVERSATION, "thanks", {}),
+        (r"^(cześć|hej|witaj|dzień dobry|dobry wieczór|hello|hi)\b.*$", Domain.CONVERSATION, "greeting", {}),
+        (r"^(dzięki|dziękuję|dzięki wielkie|thanks)\b.*$", Domain.CONVERSATION, "thanks", {}),
+        (r"^.*\b(do zobaczenia|pa|nara|żegnaj|dobranoc|bye)\b.*$", Domain.CONVERSATION, "goodbye", {}),
         (r"^(tak|yes|ok|okej)\s*[?!.]?$", Domain.CONVERSATION, "confirm", {}),
         (r"^(nie|no|nope)\s*[?!.]?$", Domain.CONVERSATION, "deny", {}),
     ]

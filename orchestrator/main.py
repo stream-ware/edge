@@ -498,18 +498,25 @@ class Orchestrator:
 
         # 2. Intent classification (LLM) tylko jeśli nie rozpoznano wzorcem
         if not dsl and self.intent_classifier:
-            intent = await self.intent_classifier.classify(text)
-            self.logger.debug(
-                f"Intent: {intent.domain.value}.{intent.action} (conf={intent.confidence:.2f}, src={intent.source})"
-            )
-            dsl = self.intent_classifier.to_dsl(intent)
-            if dsl:
-                self.logger.info(
-                    f"🧭 cmd[{cmd_id}] decision route=intent action={dsl.get('action')} source={dsl.get('_source')} confidence={dsl.get('_confidence')}"
+            try:
+                if source == "audio":
+                    intent = await asyncio.wait_for(self.intent_classifier.classify(text), timeout=1.2)
+                else:
+                    intent = await self.intent_classifier.classify(text)
+            except asyncio.TimeoutError:
+                intent = None
+            if intent is not None:
+                self.logger.debug(
+                    f"Intent: {intent.domain.value}.{intent.action} (conf={intent.confidence:.2f}, src={intent.source})"
                 )
+                dsl = self.intent_classifier.to_dsl(intent)
+                if dsl:
+                    self.logger.info(
+                        f"🧭 cmd[{cmd_id}] decision route=intent action={dsl.get('action')} source={dsl.get('_source')} confidence={dsl.get('_confidence')}"
+                    )
 
         # 3. LLM fallback dla text2dsl (ostatnia deska ratunku)
-        if not dsl and self.llm:
+        if not dsl and self.llm and source != "audio":
             self.logger.info("Using LLM DSL fallback...")
             prompt = self.text2dsl.get_llm_prompt(text)
             llm_response = await self.llm.generate(prompt)
@@ -697,6 +704,7 @@ class Orchestrator:
         responses = {
             "conversation.greeting": "Cześć! Jak mogę pomóc?",
             "conversation.thanks": "Nie ma za co!",
+            "conversation.goodbye": "Do zobaczenia!",
             "conversation.confirm": "OK, rozumiem.",
             "conversation.deny": "Rozumiem, anuluję.",
             "conversation.unclear": "Nie rozumiem. Powiedz 'pomoc' aby zobaczyć opcje.",
@@ -813,6 +821,48 @@ Odpowiedz po polsku:
         
         elif action == "diag.fix":
             problem = dsl.get("problem", "")
+
+            problem_lower = str(problem).lower()
+            if ("mqtt" in problem_lower or "broker" in problem_lower) and self.adapters.get("docker"):
+                docker_adapter = self.adapters.get("docker")
+                try:
+                    listing = await docker_adapter.execute({"action": "docker.list"})
+                    containers = listing.get("containers", []) if isinstance(listing, dict) else []
+                    mqtt_candidates = [c for c in containers if "mqtt" in str(c.get("name", "")).lower()]
+
+                    target = None
+                    for c in mqtt_candidates:
+                        if str(c.get("name")) == "streamware-mqtt":
+                            target = c
+                            break
+                    if target is None and mqtt_candidates:
+                        target = mqtt_candidates[0]
+
+                    if not target:
+                        return {
+                            "action": action,
+                            "status": "error",
+                            "error": "Nie znalazłem kontenera MQTT do uruchomienia",
+                            "result": "Podaj nazwę kontenera lub uruchom broker MQTT ręcznie."
+                        }
+
+                    name = target.get("name")
+                    status = str(target.get("status", ""))
+                    if status == "running":
+                        return {"action": action, "status": "ok", "result": f"MQTT już działa ({name})."}
+
+                    start_res = await docker_adapter.execute({"action": "docker.start", "target": name})
+                    if start_res.get("status") == "ok":
+                        return {"action": action, "status": "ok", "result": f"Uruchomiłem MQTT ({name})."}
+
+                    return {
+                        "action": action,
+                        "status": "error",
+                        "error": start_res.get("error", "Nie udało się uruchomić MQTT"),
+                        "result": "Nie udało się uruchomić brokera MQTT."
+                    }
+                except Exception as e:
+                    return {"action": action, "status": "error", "error": str(e), "result": "Błąd podczas próby uruchomienia MQTT."}
             
             if self.llm:
                 fix_prompt = f"""Użytkownik chce naprawić problem: "{problem}"

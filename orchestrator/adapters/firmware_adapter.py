@@ -12,6 +12,8 @@ import logging
 from typing import Dict, Any, Optional
 import json
 import random  # Dla symulacji
+import os
+import glob
 
 
 class FirmwareAdapter:
@@ -75,6 +77,20 @@ class FirmwareAdapter:
         """Odczyt wartości sensora."""
         metric = dsl.get("metric", "temperature")
         location = dsl.get("location", dsl.get("device", "default"))
+
+        # Specjalny przypadek: temperatura komputera / CPU / GPU (odczyt z sysfs)
+        if metric == "temperature":
+            loc = str(location or "").strip().lower()
+            if loc in {"cpu", "gpu", "komputera", "procesora", "processor", "cpu/gpu", "cpugpu"}:
+                temp = self._read_system_temperature(loc)
+                if temp is not None:
+                    return {
+                        "status": "ok",
+                        "metric": metric,
+                        "value": temp,
+                        "unit": "°C",
+                        "location": "cpu" if loc in {"cpu", "procesora", "processor"} else ("gpu" if loc == "gpu" else "komputera"),
+                    }
         
         # Znajdź urządzenie
         device = self._devices.get(location, self._devices["default"])
@@ -107,6 +123,66 @@ class FirmwareAdapter:
             "unit": units.get(metric, ""),
             "location": location
         }
+
+    def _read_system_temperature(self, scope: str) -> Optional[float]:
+        """Odczyt temperatury z /sys/class/thermal (Jetson/Linux)."""
+        try:
+            zones = sorted(glob.glob("/sys/class/thermal/thermal_zone*"))
+        except Exception:
+            zones = []
+
+        if not zones:
+            return None
+
+        scope = (scope or "").lower()
+        want = None
+        if scope == "cpu" or scope in {"procesora", "processor"}:
+            want = "cpu"
+        elif scope == "gpu":
+            want = "gpu"
+
+        best = None
+        best_score = -1
+
+        for z in zones:
+            t_path = os.path.join(z, "temp")
+            type_path = os.path.join(z, "type")
+
+            try:
+                with open(t_path, "r", encoding="utf-8") as f:
+                    raw = f.read().strip()
+                temp_milli = int(float(raw))
+            except Exception:
+                continue
+
+            try:
+                with open(type_path, "r", encoding="utf-8") as f:
+                    z_type = f.read().strip().lower()
+            except Exception:
+                z_type = ""
+
+            # Heurystyka wyboru strefy
+            score = 0
+            if want and want in z_type:
+                score += 10
+            if "cpu" in z_type:
+                score += 3
+            if "gpu" in z_type:
+                score += 3
+            if "therm" in z_type:
+                score += 1
+
+            if score > best_score:
+                best_score = score
+                best = temp_milli
+
+        if best is None:
+            return None
+
+        # sysfs zwykle w milicelsjuszach
+        if best > 1000:
+            return round(best / 1000.0, 1)
+        return round(float(best), 1)
     
     async def _set_device(self, dsl: dict) -> dict:
         """Ustawienie wartości urządzenia."""

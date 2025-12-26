@@ -107,7 +107,7 @@ class Text2DSL:
         # IoT/Sensor patterns
         self.sensor_patterns = [
             # Temperature
-            (r"(jaka jest|podaj|odczytaj|sprawdź|zmierz)?\s*(temperatur\w*|temperature)\s*(w|in)?\s*(\w+)?",
+            (r"(jaka jest|podaj|odczytaj|sprawdź|zmierz)?\s*(temperat\w*|temp\w*|temperature)\s*(w|in)?\s*(\w+)?",
              lambda m: {"action": "sensor.read", "metric": "temperature",
                        "location": m.group(4) or "default"}),
             
@@ -195,6 +195,8 @@ class Text2DSL:
         
         # Diagnostic patterns
         self.diagnostic_patterns = [
+            (r"^(uruchom|start|włącz)\s+(mqtt|broker)\b.*$",
+             lambda m: {"action": "diag.fix", "problem": "mqtt"}),
             (r"^(dlaczego|why|czemu)[?!.]*$",
              lambda m: {"action": "diag.analyze", "context": "last_error"}),
             

@@ -302,7 +302,10 @@ class Settings:
         
         try:
             import ctranslate2
-            return "cuda" in ctranslate2.get_supported_compute_types()
+            try:
+                return int(ctranslate2.get_cuda_device_count()) > 0
+            except Exception:
+                return False
         except (ImportError, Exception):
             pass
         
@@ -329,6 +332,7 @@ class Settings:
         core_candidates = [
             ctypes.util.find_library("cudnn"),
             "libcudnn.so.9",
+            "libcudnn.so.8",
             "libcudnn.so",
         ]
 
@@ -337,6 +341,9 @@ class Settings:
             "libcudnn_ops.so.9.1.0",
             "libcudnn_ops.so.9.1",
             "libcudnn_ops.so.9",
+            "libcudnn_ops.so.8.9.0",
+            "libcudnn_ops.so.8.9",
+            "libcudnn_ops.so.8",
             "libcudnn_ops.so",
         ]
 
@@ -434,7 +441,9 @@ class Settings:
         """Get effective device based on config and availability."""
         device = self.AUDIO_STT_DEVICE
         if device == "auto":
-            return "cuda" if self.is_gpu_available() else "cpu"
+            # For faster-whisper/ctranslate2 we can often run on CUDA without cuDNN.
+            # cuDNN is still useful for other stacks, so keep is_gpu_available() for general checks.
+            return "cuda" if self.is_cuda_available() else "cpu"
         return device
     
     def get_effective_compute_type(self) -> str:

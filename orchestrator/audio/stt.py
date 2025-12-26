@@ -12,6 +12,7 @@ from typing import AsyncIterator, Optional
 import queue
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
+import sys
 
 from ..settings import settings
 
@@ -54,6 +55,8 @@ class SpeechToText:
         self.vad_mode = vad_config.get("mode", settings.AUDIO_VAD_MODE)
         self.silence_duration = vad_config.get("silence_duration", settings.AUDIO_VAD_SILENCE_DURATION)
         self.max_buffer_seconds = vad_config.get("max_buffer_seconds", settings.AUDIO_VAD_MAX_BUFFER_SECONDS)
+        self.vad_backend = vad_config.get("backend")
+        self.vad_energy_threshold = float(vad_config.get("energy_threshold", 350.0))
         
         # STT config with auto-detection
         self.model_name = stt_config.get("model", settings.AUDIO_STT_MODEL)
@@ -93,6 +96,9 @@ class SpeechToText:
         self.whisper_vad_filter = bool(
             stt_config.get("whisper_vad_filter", not self.vad_enabled)
         )
+
+        if not self.vad_backend:
+            self.vad_backend = "energy" if sys.version_info >= (3, 13) else "webrtcvad"
 
     def _normalize_input_device(self, value):
         if value is None:
@@ -141,8 +147,17 @@ class SpeechToText:
                 compute_type="float32"
             )
         
-        if self.vad_enabled and webrtcvad:
-            self.vad = webrtcvad.Vad(self.vad_mode)
+        if self.vad_enabled and self.vad_backend == "webrtcvad" and webrtcvad:
+            try:
+                self.vad = webrtcvad.Vad(self.vad_mode)
+            except Exception:
+                self.vad = None
+        else:
+            self.vad = None
+
+        self.logger.info(
+            f"VAD: enabled={self.vad_enabled} backend={self.vad_backend} mode={self.vad_mode} whisper_vad_filter={self.whisper_vad_filter}"
+        )
         
         self.logger.info("✅ STT initialized")
     
@@ -220,11 +235,17 @@ class SpeechToText:
             
             # VAD
             is_speech = True
-            if self.vad:
+            if self.vad_backend == "energy":
+                try:
+                    peak = float(np.max(np.abs(audio_chunk))) if len(audio_chunk) else 0.0
+                    is_speech = peak >= self.vad_energy_threshold
+                except Exception:
+                    is_speech = False
+            elif self.vad:
                 try:
                     is_speech = self.vad.is_speech(audio_chunk.tobytes(), self.sample_rate)
-                except:
-                    pass
+                except Exception:
+                    is_speech = False
             
             if is_speech:
                 if not self.is_speaking and self._on_speech_start:
