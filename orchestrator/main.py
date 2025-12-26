@@ -21,6 +21,7 @@ import os
 import re
 import time
 import difflib
+import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any, TYPE_CHECKING
 
@@ -286,7 +287,7 @@ class Orchestrator:
             self.adapters["vision"] = VisionAdapter(
                 self.config.get("vision", {})
             )
-            await self.adapters["vision"].initialize()
+            # NOTE: do not initialize on startup; initialize on first vision command
         
         self.logger.info("  → Shell Adapter (diagnostics)...")
         from .adapters.shell_adapter import ShellAdapter
@@ -473,58 +474,126 @@ class Orchestrator:
         Returns:
             Odpowiedź w języku naturalnym
         """
+        cmd_id = str(uuid.uuid4())[:8]
+        started_at = time.perf_counter()
         self._last_command = text
-        
-        # 1. Intent Classification (dynamiczne NLP/LLM)
-        intent = None
-        dsl = None
-        
-        if self.intent_classifier:
+        text = (text or "").strip()
+        self.logger.info(f"🧭 cmd[{cmd_id}] input source={source} text={text!r}")
+
+        # 1. Fast path: Text2DSL pattern matching (unika LLM dla prostych komend)
+        intent: Optional[Intent] = None
+        dsl = self.text2dsl.nl_to_dsl(text)
+        if dsl:
+            self.logger.info(
+                f"🧭 cmd[{cmd_id}] decision route=text2dsl action={dsl.get('action')} source={dsl.get('_source')}"
+            )
+
+        # 2. Intent classification (LLM) tylko jeśli nie rozpoznano wzorcem
+        if not dsl and self.intent_classifier:
             intent = await self.intent_classifier.classify(text)
-            self.logger.debug(f"Intent: {intent.domain.value}.{intent.action} (conf={intent.confidence:.2f}, src={intent.source})")
-            
-            # Jeśli wymaga wyjaśnienia
-            if intent.requires_clarification:
-                response = intent.clarification_prompt or "Nie rozumiem. Powiedz inaczej lub 'pomoc'."
-                await self._output_response(response, source)
-                return response
-            
-            # Konwertuj Intent na DSL
+            self.logger.debug(
+                f"Intent: {intent.domain.value}.{intent.action} (conf={intent.confidence:.2f}, src={intent.source})"
+            )
             dsl = self.intent_classifier.to_dsl(intent)
-        
-        # 2. Fallback do text2dsl (pattern matching) jeśli brak intent lub niski confidence
-        if not dsl or dsl.get("_confidence", 1.0) < 0.4:
-            pattern_dsl = self.text2dsl.nl_to_dsl(text)
-            if pattern_dsl:
-                dsl = pattern_dsl
-                self.logger.debug(f"Pattern fallback: {dsl.get('action')}")
-        
-        # 3. LLM fallback dla text2dsl jeśli nadal brak
+            if dsl:
+                self.logger.info(
+                    f"🧭 cmd[{cmd_id}] decision route=intent action={dsl.get('action')} source={dsl.get('_source')} confidence={dsl.get('_confidence')}"
+                )
+
+        # 3. LLM fallback dla text2dsl (ostatnia deska ratunku)
         if not dsl and self.llm:
             self.logger.info("Using LLM DSL fallback...")
             prompt = self.text2dsl.get_llm_prompt(text)
             llm_response = await self.llm.generate(prompt)
             if llm_response:
                 dsl = self.text2dsl.parse_llm_response(llm_response)
-        
-        # 4. Jeśli nadal nie ma DSL
+                if dsl:
+                    self.logger.info(
+                        f"🧭 cmd[{cmd_id}] decision route=llm_dsl action={dsl.get('action')} source={dsl.get('_source')}"
+                    )
+
+        # 4. Jeśli nadal nie ma DSL -> proaktywna prośba o doprecyzowanie
         if not dsl:
-            response = "Nie rozumiem tej komendy. Powiedz 'pomoc' aby zobaczyć dostępne opcje."
-            await self._output_response(response, source)
-            return response
+            dsl = {
+                "action": "system.clarify",
+                "prompt": "Nie jestem pewien o co chodzi. Co chcesz zrobić?",
+                "options": [
+                    "status systemu",
+                    "temperatura",
+                    "status kontenerów Docker",
+                    "zdiagnozuj problemy",
+                    "pomoc"
+                ],
+                "_source": "fallback",
+                "_raw": text,
+                "_confidence": 0.2
+            }
         
         # 5. Dodaj target_hint jeśli brak target w DSL
         if target_hint and not dsl.get("target"):
             dsl["target"] = target_hint
+
+        # 5b. Disambiguacja temperatury (otoczenie vs CPU/GPU vs IoT)
+        if (dsl.get("action") == "sensor.read" and (dsl.get("metric") or "") == "temperature"):
+            text_lower = text.lower()
+            has_explicit_scope = any(
+                k in text_lower
+                for k in [
+                    "cpu", "gpu", "procesor", "karta", "otoczenia", "pokój", "salon", "kuchnia",
+                    "sypialnia", "iot", "smart", "smarthome", "mqtt", "komputera"
+                ]
+            )
+            if not has_explicit_scope and (dsl.get("location") in {None, "default"}):
+                dsl = {
+                    "action": "system.clarify",
+                    "prompt": "O jaką temperaturę chodzi?",
+                    "options": [
+                        "temperatura komputera (CPU/GPU)",
+                        "temperatura otoczenia (czujnik pokojowy)",
+                        "temperatura urządzenia IoT/SmartHome",
+                        "temperatura z MQTT"
+                    ],
+                    "_source": "disambiguation",
+                    "_raw": text,
+                    "_confidence": 0.7,
+                    "_suggested_domain": "sensor",
+                    "_suggested_action": "read",
+                    "_entities": {"metric": "temperature"}
+                }
         
         self.logger.info(f"📋 DSL: {json.dumps(dsl, ensure_ascii=False)}")
         
         # 6. Route to appropriate handler
         action = dsl.get("action") or ""
+
+        # Guard: never execute shell.run unless explicitly requested.
+        if action == "shell.run":
+            src = str(dsl.get("_source") or "")
+            cmd = (dsl.get("command") or "").strip()
+            explicit = bool(re.search(r"\b(wykonaj|uruchom)\b.*\b(komend|command|shell)\b", text, flags=re.IGNORECASE))
+            if (not explicit) and src in {"llm", "context", "fallback", "proactive"}:
+                self.logger.warning(f"🧭 cmd[{cmd_id}] blocked shell.run from source={src} cmd={cmd!r}")
+                dsl = {
+                    "action": "system.clarify",
+                    "prompt": "Wygląda na to, że chcesz wykonać komendę w shell. Czy mam ją uruchomić?",
+                    "options": [
+                        f"tak: wykonaj komendę {cmd}" if cmd else "tak: wykonaj komendę ...",
+                        "nie",
+                        "pokaż logi",
+                        "zdiagnozuj system"
+                    ],
+                    "_source": "guard",
+                    "_raw": text,
+                    "_confidence": 0.9
+                }
+                action = dsl.get("action")
         
         if action == "system.clarify":
             response = self._format_clarification(dsl)
+            self.logger.info(f"💬 Response: {response}")
             await self._output_response(response, source, dsl)
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            self.logger.info(f"🧭 cmd[{cmd_id}] done clarify elapsed_ms={elapsed_ms}")
             return response
         elif action.startswith("system."):
             result = await self._handle_system_command(dsl)
@@ -551,10 +620,22 @@ class Orchestrator:
         response = self.text2dsl.dsl_to_nl(result)
         
         self.logger.info(f"💬 Response: {response}")
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        self.logger.info(f"🧭 cmd[{cmd_id}] done action={action} status={result.get('status')} elapsed_ms={elapsed_ms}")
         
         # 8. Update conversation context
-        if self.intent_classifier and intent:
-            self.intent_classifier.update_context(text, intent, response)
+        if self.intent_classifier:
+            if intent is None and isinstance(action, str) and action:
+                try:
+                    prefix = action.split(".")[0] if "." in action else action
+                    verb = action.split(".", 1)[1] if "." in action else "unknown"
+                    domain = Domain(prefix) if prefix in {d.value for d in Domain} else Domain.UNKNOWN
+                    intent = Intent(domain, verb, confidence=float(dsl.get("_confidence", 1.0) or 1.0), raw_text=text, source=str(dsl.get("_source", "pattern")))
+                except Exception:
+                    intent = None
+
+            if intent:
+                self.intent_classifier.update_context(text, intent, response)
         
         # 9. Output
         await self._output_response(response, source, dsl)
@@ -758,6 +839,9 @@ Odpowiedz po polsku, krótko i konkretnie."""
         
         # Znajdź adapter
         adapter = self.adapters.get(category)
+        if adapter is None and category in {"sensor", "device"}:
+            # sensor.* / device.* obsługuje FirmwareAdapter
+            adapter = self.adapters.get("firmware")
         
         if not adapter:
             return {

@@ -10,6 +10,7 @@ from typing import Optional
 from pathlib import Path
 import tempfile
 import os
+import threading
 
 import numpy as np
 
@@ -45,6 +46,8 @@ class TextToSpeech:
         self._is_speaking = False
         self._lock = asyncio.Lock()
         self._stop_requested = False
+        self._playback_event = threading.Event()
+        self._playback_lock = threading.Lock()
         self._current_proc = None
     
     async def initialize(self):
@@ -75,11 +78,9 @@ class TextToSpeech:
 
     async def stop(self):
         self._stop_requested = True
-        if sd is not None:
-            try:
-                sd.stop()
-            except Exception:
-                pass
+
+        with self._playback_lock:
+            self._playback_event.set()
 
         proc = self._current_proc
         if proc is not None and getattr(proc, "returncode", None) is None:
@@ -99,32 +100,38 @@ class TextToSpeech:
         
         async with self._lock:
             self._stop_requested = False
+            with self._playback_lock:
+                self._playback_event = threading.Event()
+                playback_event = self._playback_event
             self._is_speaking = True
             
             try:
                 self.logger.debug(f"TTS: {text[:50]}...")
                 
                 if not self._use_cli and self.voice:
-                    await self._speak_native(text)
+                    await self._speak_native(text, playback_event)
                 else:
-                    await self._speak_cli(text)
+                    await self._speak_cli(text, playback_event)
                     
             except Exception as e:
                 self.logger.error(f"TTS error: {e}")
             finally:
                 self._is_speaking = False
     
-    async def _speak_native(self, text: str):
+    async def _speak_native(self, text: str, playback_event: threading.Event):
         """Synteza przez Piper native."""
         loop = asyncio.get_event_loop()
         
         audio = await loop.run_in_executor(None, self._synthesize, text)
 
-        if self._stop_requested:
+        if self._stop_requested or playback_event.is_set():
             return
         
         if audio is not None and len(audio) > 0:
-            await loop.run_in_executor(None, self._play, audio)
+            await loop.run_in_executor(
+                None,
+                lambda: self._play(audio, samplerate=self.sample_rate, playback_event=playback_event)
+            )
     
     def _synthesize(self, text: str) -> Optional[np.ndarray]:
         """Synteza tekstu."""
@@ -145,16 +152,57 @@ class TextToSpeech:
             self.logger.error(f"Synthesis error: {e}")
             return None
     
-    def _play(self, audio: np.ndarray):
+    def _play(self, audio: np.ndarray, samplerate: Optional[int] = None, playback_event: Optional[threading.Event] = None):
         """Odtwarzanie audio."""
         try:
-            audio_float = audio.astype(np.float32) / 32768.0
-            sd.play(audio_float, samplerate=self.sample_rate)
-            sd.wait()
+            if sd is None:
+                return
+
+            stop_ev = playback_event
+            if stop_ev is None:
+                stop_ev = threading.Event()
+
+            sr = int(samplerate or self.sample_rate)
+
+            if audio is None or len(audio) == 0:
+                return
+
+            if audio.dtype.kind in {"f"}:
+                audio_float = audio.astype(np.float32)
+            else:
+                audio_float = audio.astype(np.float32) / 32768.0
+
+            if audio_float.ndim == 1:
+                audio_float = audio_float.reshape(-1, 1)
+
+            stream = sd.OutputStream(
+                samplerate=sr,
+                channels=int(audio_float.shape[1]),
+                dtype="float32",
+                blocksize=0,
+            )
+            stream.start()
+
+            idx = 0
+            block = 2048
+            while idx < len(audio_float) and not stop_ev.is_set():
+                stream.write(audio_float[idx: idx + block])
+                idx += block
+
         except Exception as e:
             self.logger.error(f"Playback error: {e}")
+        finally:
+            if stream is not None:
+                try:
+                    stream.stop()
+                except Exception:
+                    pass
+                try:
+                    stream.close()
+                except Exception:
+                    pass
     
-    async def _speak_cli(self, text: str):
+    async def _speak_cli(self, text: str, playback_event: threading.Event):
         """Fallback do CLI."""
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             temp_path = f.name
@@ -175,13 +223,15 @@ class TextToSpeech:
                 await proc.communicate()
                 self._current_proc = None
 
-            if self._stop_requested:
+            if self._stop_requested or playback_event.is_set():
                 return
             
             if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
                 data, rate = sf.read(temp_path)
-                sd.play(data, rate)
-                sd.wait()
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self._play(data, samplerate=rate, playback_event=playback_event)
+                )
                 
         except Exception as e:
             self.logger.error(f"CLI TTS error: {e}")

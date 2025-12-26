@@ -11,6 +11,7 @@ import logging
 from typing import AsyncIterator, Optional
 import queue
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 
 from ..settings import settings
 
@@ -57,6 +58,8 @@ class SpeechToText:
         # STT config with auto-detection
         self.model_name = stt_config.get("model", settings.AUDIO_STT_MODEL)
         self.language = stt_config.get("language", settings.AUDIO_STT_LANGUAGE)
+
+        self.beam_size = int(stt_config.get("beam_size", 1))
         
         # Device auto-detection: "auto" -> check GPU availability
         cfg_device = stt_config.get("device", settings.AUDIO_STT_DEVICE)
@@ -77,13 +80,19 @@ class SpeechToText:
         
         # Buffers
         self.speech_buffer: list = []
-        self._audio_queue: queue.Queue = queue.Queue()
+        self._audio_queue: queue.Queue = queue.Queue(maxsize=1000)
         self._running = False
+
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt")
         
         # State
         self.is_speaking = False
         self.silence_frames = 0
         self._on_speech_start = on_speech_start
+
+        self.whisper_vad_filter = bool(
+            stt_config.get("whisper_vad_filter", not self.vad_enabled)
+        )
 
     def _normalize_input_device(self, value):
         if value is None:
@@ -141,8 +150,20 @@ class SpeechToText:
         """Zwolnienie zasobów."""
         self._running = False
         if self._input_stream:
-            self._input_stream.stop()
-            self._input_stream.close()
+            try:
+                self._input_stream.stop()
+            except Exception:
+                pass
+            try:
+                self._input_stream.close()
+            except Exception:
+                pass
+
+        if self._executor:
+            try:
+                self._executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                self._executor.shutdown(wait=False)
     
     async def stream(self) -> AsyncIterator[str]:
         """Generator transkrypcji."""
@@ -157,7 +178,17 @@ class SpeechToText:
         def audio_callback(indata, frames, time_info, status):
             if status:
                 self.logger.warning(f"Audio status: {status}")
-            self._audio_queue.put(indata.copy())
+            try:
+                self._audio_queue.put_nowait(indata.copy())
+            except queue.Full:
+                try:
+                    self._audio_queue.get_nowait()
+                except Exception:
+                    return
+                try:
+                    self._audio_queue.put_nowait(indata.copy())
+                except Exception:
+                    return
         
         try:
             self._input_stream = sd.InputStream(
@@ -243,12 +274,12 @@ class SpeechToText:
         
         try:
             segments, _ = await loop.run_in_executor(
-                None,
+                self._executor,
                 lambda: self.model.transcribe(
                     audio_float,
                     language=self.language if self.language != "auto" else None,
-                    beam_size=5,
-                    vad_filter=True
+                    beam_size=self.beam_size,
+                    vad_filter=self.whisper_vad_filter
                 )
             )
             

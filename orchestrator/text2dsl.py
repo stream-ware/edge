@@ -533,15 +533,39 @@ class Text2DSL:
             return "Analizuję logi..."
         
         elif action == "shell.run":
-            output = dsl.get("stdout", "")
+            cmd = dsl.get("command", "")
+            rc = dsl.get("returncode", None)
+            duration_ms = dsl.get("duration_ms", None)
+
             if status == "rejected":
-                return f"Nie mogę wykonać tej komendy: {dsl.get('error', 'niedozwolona')}"
+                return f"Odrzucono komendę: {cmd or '[brak]'} ({dsl.get('error', 'niedozwolona')})"
+
+            if status == "timeout":
+                return f"Timeout podczas wykonywania: {cmd or '[brak]'}"
+
+            if status == "error":
+                err = dsl.get("stderr") or dsl.get("error") or "nieznany błąd"
+                return f"Błąd przy wykonywaniu: {cmd or '[brak]'} ({err})"
+
+            output = dsl.get("stdout", "")
+            header_parts = []
+            if cmd:
+                header_parts.append(f"Komenda: {cmd}")
+            if rc is not None:
+                header_parts.append(f"rc={rc}")
+            if duration_ms is not None:
+                header_parts.append(f"{duration_ms}ms")
+
+            header = " (" + ", ".join(header_parts[1:]) + ")" if len(header_parts) > 1 else ""
+            prefix = header_parts[0] + header + "\n" if header_parts else ""
+
             if output:
                 lines = output.split('\n')
-                if len(lines) > 5:
-                    return '\n'.join(lines[:5]) + f"\n... ({len(lines)} linii)"
-                return output
-            return "Wykonano."
+                if len(lines) > 8:
+                    return prefix + '\n'.join(lines[:8]) + f"\n... ({len(lines)} linii)"
+                return prefix + output
+
+            return prefix + "Wykonano."
         
         # Conversation responses
         elif action and action.startswith("conversation."):

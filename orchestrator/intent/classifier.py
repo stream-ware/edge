@@ -231,6 +231,19 @@ FORMAT ODPOWIEDZI:
             if re.match(pattern, text_lower):
                 self.logger.debug(f"Fast match: {text} -> {domain.value}.{action}")
                 return Intent(domain, action, confidence=1.0, entities=entities, raw_text=text, source="pattern")
+
+        # 1b. Bardzo krótkie/niejednoznaczne wypowiedzi: nie wysyłaj do LLM (oszczędza czas i zmniejsza halucynacje)
+        words = [w for w in re.split(r"\s+", text_lower) if w]
+        has_digits = any(ch.isdigit() for ch in text_lower)
+        likely_domain_keyword = any(
+            k in text_lower
+            for k in [
+                "docker", "kontener", "mqtt", "log", "env", "zmienn",
+                "kamera", "kamery", "rtsp", "temperatur", "cpu", "gpu", "świat", "lampa"
+            ]
+        )
+        if (len(words) <= 2 and not has_digits and not likely_domain_keyword) or re.match(r"^(zobacz|spójrz|patrz|look)\s*[!?.]*$", text_lower):
+            return self._generate_proactive_response(text)
         
         # 2. LLM classification
         if self.llm:
@@ -260,8 +273,14 @@ WYPOWIEDŹ UŻYTKOWNIKA: "{text}"
 
 Odpowiedz TYLKO JSON:"""
         
+        strict_system = (
+            "Jesteś klasyfikatorem intencji. Zwracasz WYŁĄCZNIE poprawny JSON. "
+            "Bez markdown, bez komentarzy, bez dodatkowych znaków. "
+            "Nie używaj apostrofów do kluczy JSON (tylko cudzysłowy)."
+        )
+
         try:
-            response = await self.llm.generate(prompt)
+            response = await self.llm.generate(prompt, system_prompt=strict_system)
             if not response:
                 return None
             
@@ -269,8 +288,13 @@ Odpowiedz TYLKO JSON:"""
             if response.startswith("```"):
                 response = re.sub(r"```(?:json)?\n?", "", response)
                 response = response.rstrip("`")
-            
-            data = json.loads(response)
+
+            # Wyciągnij pierwszy obiekt JSON z odpowiedzi (LLM często dodaje tekst)
+            json_obj = self._extract_first_json_object(response)
+            if not json_obj:
+                raise json.JSONDecodeError("no json object", response, 0)
+
+            data = json.loads(json_obj)
             
             domain_str = data.get("domain", "unknown")
             try:
@@ -285,6 +309,7 @@ Odpowiedz TYLKO JSON:"""
                 entities=data.get("entities", {}),
                 requires_clarification=data.get("requires_clarification", False),
                 clarification_prompt=data.get("clarification_prompt"),
+                clarification_options=data.get("clarification_options", []),
                 raw_text=text,
                 source="llm"
             )
@@ -294,6 +319,40 @@ Odpowiedz TYLKO JSON:"""
         except Exception as e:
             self.logger.error(f"LLM classification error: {e}")
             return None
+
+    def _extract_first_json_object(self, text: str) -> Optional[str]:
+        """Wyciągnij pierwszy obiekt JSON z tekstu (od pierwszego '{' do pasującego '}')."""
+        if not text:
+            return None
+
+        start = text.find("{")
+        if start < 0:
+            return None
+
+        depth = 0
+        in_str = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_str = False
+                continue
+
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+
+        return None
     
     def _context_inference(self, text: str) -> Optional[Intent]:
         """Inferuj intencję z kontekstu."""
@@ -331,6 +390,23 @@ Odpowiedz TYLKO JSON:"""
     def _generate_proactive_response(self, text: str) -> Intent:
         """Generuj proaktywną odpowiedź z propozycjami zamiast 'nie rozumiem'."""
         text_lower = text.lower()
+
+        # "Zobacz" / "spójrz" - zwykle chodzi o Vision, ale brakuje targetu
+        if re.match(r"^(zobacz|spójrz|patrz|look)\s*[!?.]*$", text_lower.strip()):
+            return Intent(
+                Domain.VISION, "describe",
+                confidence=0.7,
+                raw_text=text,
+                source="proactive"
+            ).with_options(
+                "Co mam sprawdzić?",
+                [
+                    "co widzisz (opis z kamery)",
+                    "ile osób widzisz",
+                    "lista kamer",
+                    "dodaj kamerę RTSP",
+                ]
+            )
         
         # Wykryj słowa kluczowe i zaproponuj opcje
         

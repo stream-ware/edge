@@ -32,8 +32,9 @@ class VisionAdapter:
     def __init__(self, config: dict = None):
         self.logger = logging.getLogger("vision_adapter")
         self.config = config or {}
-        
-        self.detector = ObjectDetector(self.config)
+
+        self.detector: Optional[ObjectDetector] = None
+        self._initialized = False
         self._running = False
         self._detection_task: Optional[asyncio.Task] = None
         
@@ -42,6 +43,10 @@ class VisionAdapter:
     
     async def initialize(self):
         """Inicjalizacja adaptera."""
+        if self._initialized:
+            return
+
+        self.detector = ObjectDetector(self.config)
         await self.detector.initialize()
         
         # Auto-add cameras from config
@@ -56,6 +61,8 @@ class VisionAdapter:
         # Start detection loop
         self._running = True
         self._detection_task = asyncio.create_task(self._detection_loop())
+
+        self._initialized = True
         
         self.logger.info("✅ Vision adapter initialized")
     
@@ -64,10 +71,14 @@ class VisionAdapter:
         self._running = False
         if self._detection_task:
             self._detection_task.cancel()
-        await self.detector.cleanup()
+        if self.detector:
+            await self.detector.cleanup()
+        self._initialized = False
     
     async def _detection_loop(self):
         """Background detection loop."""
+        if not self.detector:
+            return
         try:
             async for detections in self.detector.stream():
                 for callback in self._on_detection_callbacks:
@@ -95,6 +106,9 @@ class VisionAdapter:
         - vision.scan_network: Skanuj sieć RTSP
         """
         action = dsl.get("action", "")
+
+        if not self._initialized:
+            await self.initialize()
         
         handlers = {
             "vision.add_camera": self._add_camera,
@@ -116,6 +130,8 @@ class VisionAdapter:
     
     async def _add_camera(self, dsl: dict) -> dict:
         """Dodanie kamery."""
+        if not self.detector:
+            return {"status": "error", "error": "Vision adapter not initialized"}
         source = dsl.get("source")
         name = dsl.get("name")
         
@@ -144,6 +160,8 @@ class VisionAdapter:
     
     async def _remove_camera(self, dsl: dict) -> dict:
         """Usunięcie kamery."""
+        if not self.detector:
+            return {"status": "error", "error": "Vision adapter not initialized"}
         name = dsl.get("name") or dsl.get("target")
         
         if not name:
@@ -159,6 +177,8 @@ class VisionAdapter:
     
     async def _list_cameras(self, dsl: dict) -> dict:
         """Lista kamer."""
+        if not self.detector:
+            return {"status": "error", "error": "Vision adapter not initialized"}
         cameras = self.detector.list_cameras()
         
         return {

@@ -70,7 +70,7 @@ Nie dodawaj wyjaśnień, tylko sam JSON."""
         if self._client:
             await self._client.aclose()
     
-    async def generate(self, prompt: str) -> Optional[str]:
+    async def generate(self, prompt: str, system_prompt: Optional[str] = None) -> Optional[str]:
         """
         Generacja odpowiedzi LLM.
         
@@ -87,7 +87,7 @@ Nie dodawaj wyjaśnień, tylko sam JSON."""
             body = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": self.system_prompt},
+                    {"role": "system", "content": system_prompt or self.system_prompt},
                     {"role": "user", "content": prompt}
                 ],
                 "stream": False,

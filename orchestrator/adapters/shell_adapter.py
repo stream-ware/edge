@@ -12,6 +12,7 @@ import asyncio
 import logging
 import shlex
 import os
+import time
 from typing import Optional, Dict, Any, List
 
 
@@ -122,6 +123,8 @@ class ShellAdapter:
     async def execute(self, command: str, timeout: int = None) -> Dict[str, Any]:
         """Wykonuje komendę shell z walidacją bezpieczeństwa."""
         timeout = timeout or self.timeout
+
+        start = time.perf_counter()
         
         is_safe, reason = self._is_safe_command(command)
         if not is_safe:
@@ -133,7 +136,7 @@ class ShellAdapter:
                 "suggestion": "Użyj dozwolonej komendy diagnostycznej"
             }
         
-        self.logger.info(f"Wykonuję: {command}")
+        self.logger.info(f"shell.run start: {command}")
         
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -150,10 +153,13 @@ class ShellAdapter:
                 )
             except asyncio.TimeoutError:
                 proc.kill()
+                duration_ms = int((time.perf_counter() - start) * 1000)
+                self.logger.warning(f"shell.run timeout after {duration_ms}ms: {command}")
                 return {
                     "status": "timeout",
                     "command": command,
                     "error": f"Przekroczono limit czasu ({timeout}s)",
+                    "duration_ms": duration_ms,
                     "suggestion": "Komenda trwa zbyt długo, spróbuj z mniejszym zakresem"
                 }
             
@@ -164,20 +170,33 @@ class ShellAdapter:
                 stdout_text = stdout_text[:self.max_output] + "\n... (obcięto)"
             if len(stderr_text) > self.max_output:
                 stderr_text = stderr_text[:self.max_output] + "\n... (obcięto)"
+
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            stdout_lines = len(stdout_text.splitlines()) if stdout_text else 0
+            stderr_lines = len(stderr_text.splitlines()) if stderr_text else 0
+
+            self.logger.info(
+                f"shell.run done: rc={proc.returncode} duration_ms={duration_ms} stdout_lines={stdout_lines} stderr_lines={stderr_lines} cmd={command}"
+            )
             
             return {
                 "status": "ok" if proc.returncode == 0 else "error",
                 "command": command,
                 "returncode": proc.returncode,
+                "duration_ms": duration_ms,
+                "stdout_lines": stdout_lines,
+                "stderr_lines": stderr_lines,
                 "stdout": stdout_text.strip(),
                 "stderr": stderr_text.strip(),
             }
             
         except Exception as e:
+            duration_ms = int((time.perf_counter() - start) * 1000)
             self.logger.error(f"Shell error: {e}")
             return {
                 "status": "error",
                 "command": command,
+                "duration_ms": duration_ms,
                 "error": str(e)
             }
     
