@@ -107,8 +107,8 @@ class Text2DSL:
         # IoT/Sensor patterns
         self.sensor_patterns = [
             # Temperature
-            (r"(jaka jest |podaj |odczytaj )?(temperatura|temperature)\s*(w |in )?(\w+)?",
-             lambda m: {"action": "sensor.read", "metric": "temperature", 
+            (r"(jaka jest|podaj|odczytaj|sprawdź|zmierz)?\s*(temperatur\w*|temperature)\s*(w|in)?\s*(\w+)?",
+             lambda m: {"action": "sensor.read", "metric": "temperature",
                        "location": m.group(4) or "default"}),
             
             # Humidity
@@ -150,6 +150,8 @@ class Text2DSL:
         
         # Vision patterns
         self.vision_patterns = [
+            (r"^(zobacz|spójrz|patrz|look)[!?.]*$",
+             lambda m: {"action": "system.clarify", "prompt": "Co mam sprawdzić?", "options": ["co widzisz", "ile osób widzisz", "lista kamer", "dodaj kamerę RTSP"]}),
             # Describe/What do you see
             (r"(co widzisz|co jest na|opisz|describe|what do you see)",
              lambda m: {"action": "vision.describe"}),
